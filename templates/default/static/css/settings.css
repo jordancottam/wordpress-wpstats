@@ -1,0 +1,208 @@
+/*
+	Accordion
+*/
+
+#wpstats-settings-accordion {
+	margin: 0 auto 0 auto;
+	width: 50%;
+}
+
+/* Accordion group header */
+#wpstats-settings-accordion .ui-accordion-header {
+	line-height: 3.5em;
+	border-radius: 0;
+	border: 0;
+	border-bottom: 1px solid #d7d7d7 !important;
+	margin-top: 10px;
+}
+
+/* Inactive icon */
+.wpstats-accordion-header-icon {
+	background-position: 0 -476px;
+	width: 26px;
+	height: 26px;
+}
+
+/* Active icon */
+.wpstats-accordion-header-active-icon {
+	background-position: 0 -341px;
+	width: 26px;
+	height: 8px;
+}
+
+/* Accordion non-active group icon */
+#wpstats-settings-accordion .wpstats-accordion-header-icon {
+	top: 42% !important;
+}
+
+/* Accordion group headings with icons */
+#wpstats-settings-accordion .ui-accordion-icons {
+	height: 50px;
+	background: rgba( 255, 255, 255, 0.95 ) !important;
+	padding-left: 2.8em;
+}
+.wpstats-setting-header.ui-accordion-header:before,
+.wpstats-setting-header.ui-accordion-header-active:before {
+	content: initial;
+}
+.ui-accordion-content {
+	background: rgba( 255, 255, 255, 0.9 ) !important;
+}
+
+/* Accordion group icons */
+#wpstats-settings-accordion .ui-icon {
+	width: 25px;
+	height: 24px;
+}
+
+/* Accordion group content */
+#wpstats-settings-accordion .ui-accordion-content {
+	border: 0;
+	border-radius: 0;
+}
+
+/*
+	Forms
+*/
+
+.wpstats-form-group {
+
+}
+
+.wpstats-form-group:not(:first-child) {
+	margin-top: 10px;
+}
+
+.wpstats-form-label {
+	font-weight: 300;
+}
+
+.wpstats-form-control {
+	width: 100%;
+	height: 40px;
+}
+
+.wpstats-form-help {
+	font-style: italic;
+	font-size: 12px;
+}
+
+.wpstats-fieldset {
+	border: 1px solid #ccc;
+	padding: 10px;
+}
+
+.wpstats-fieldset:not(:first-child) {
+	margin-top: 20px;
+}
+
+.wpstats-fieldset legend {
+	font-size: 15px;
+	font-weight: bold;
+}
+
+#save_settings {
+	margin-top: 10px;
+}
+
+.wpstats-setting-header {
+	-webkit-box-shadow: none !important;
+	box-sizing: content-box;
+	box-shadow: none !important;
+	outline: none !important;
+}
+
+#wpstats-settings-validate-license-loading-container {
+	display: none;
+	margin-top: 10px;
+}
+
+#wpstats-successful-license-validation-request,
+#wpstats-unsuccessful-license-validation-request {
+	display: none;
+}
+
+.wpstats-setting-image-container {
+	overflow: hidden;
+}
+
+/* Overlays bottom half of WP menu corectly (WP 3.8+) */
+div.ui-widget-overlay.ui-front {
+	z-index: 10000;
+}
+.ui-dialog {
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+}
+.ui-dialog-titlebar {
+	border: 0;
+	border-radius: 0;
+	padding: 20px !important;
+}
+.ui-dialog-titlebar button {
+	margin-right: 5px !important;
+}
+
+/* Save Settings Result Message */
+#wpstats-save-settings-result {
+	display: none;
+}
+
+/* Save Settings Loading Container */
+#wpstats-settings-save-settings-loading-container {
+	display: none;
+}
+
+/* Reload Settings */
+#settings-reload {
+	margin-top: 10px;
+	display: none;
+}
+
+/*
+    Upload Image
+*/
+
+/* Container */
+.wpstats-setting-image-upload-container {
+	position: relative;
+}
+
+/* Upload Image button */
+.wpstats-upload-image-button {
+	background-color: #72aa3f;
+	margin-top: 5px;
+}
+.wpstats-upload-image-button:hover {
+	background-color: #689c3a;
+	cursor: pointer;
+}
+
+/* Upload image input */
+.wpstats-upload-image {
+	font-size: 20px;
+	height: 34px;
+	left: -1px;
+	opacity: 0;
+	position: absolute;
+	top: 0;
+}
+
+#wpstats_reports_users_allowed_access_chosen .search-field,
+#wpstats_settings_users_allowed_access_chosen .search-field {
+	width: 100%;
+}
+#wpstats_reports_users_allowed_access_chosen .search-field input,
+#wpstats_settings_users_allowed_access_chosen .search-field input {
+	width: auto !important;
+}
+
+/*
+	CSS3 Media Queries
+*/
+@media screen and (max-width : 563px) {
+	#wpstats-settings-accordion {
+		width: 100%;
+	}
+}

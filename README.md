@@ -1,0 +1,2 @@
+# wordpress-wpstats
+This repository is a genericised archive of a WordPress plugin originally developed for a corporate client and publicly released under the GPLv2 license.

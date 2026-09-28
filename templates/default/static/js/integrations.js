@@ -1,0 +1,3612 @@
+/*http://www.jslint.com/*/
+/*jslint white: true */
+/*global ajaxurl, wpstats_integrations, wpstats_mashboard, wpstats_google_analytics, wpstats_facebook, wpstats_twitter, wpstats_google_adwords, wpstats_mailchimp, console, window*/
+
+function createObject( proto ) {
+	function Ctor() { }
+	Ctor.prototype = proto;
+	return new Ctor();
+}
+
+// Integration - parent
+function Integration( viewName ) {
+	this.viewName = viewName;
+	this.startDate = jQuery( '#start_date' ).val();
+	this.endDate = jQuery( '#end_date' ).val();
+	this.chartOptions = {
+		grid: {
+			backgroundColor: null, /* Transparent, automatically handles transparency for IE */
+			borderColor: {
+				top: '#c8c8c8',
+				left: '#c8c8c8',
+				right: '#c8c8c8',
+				bottom: '#c8c8c8'
+			},
+			borderWidth: 1,
+			hoverable: true
+		},
+		legend: {
+			show: false
+		},
+		series: {
+			lines: {
+				show: true
+			},
+			points: {
+				fillColor: null, /* Use color of each data series */
+				fill: 1, /* Opaque */
+				radius: 1.75, // Use smaller markers for Mashboard charts
+				show: true
+			}
+		},
+		shadowSize: 0,
+		tooltip: true,
+		tooltipOpts: {
+			content: function ( label, x, y ) {
+				return '<strong>' + y.toString() + '</strong><br>' + x;
+			}
+		},
+		xaxis: {
+			mode: 'categories',
+			tickLength: 0 // Don't show vertical lines for Mashboard charts
+		},
+		yaxes: [
+			{
+				tickDecimals: 0,
+				min: 0
+			},
+			{
+				min: 0,
+				alignTicksWithAxis: 1,
+				position: 'right'
+			}
+		]
+	};
+
+	if ( 'detail' === this.viewName ) {
+		// Use large markers for detail charts
+		this.chartOptions.series.points.radius = 3.5;
+		// Show vertical lines for detail charts
+		this.chartOptions.xaxis.tickLength = null;
+		this.$chartFigure = jQuery( '#wpstats-detail-chart-key-container' );
+	}
+	this.currentUserCanAccessSettings = false;
+}
+
+/**
+ * Show the chart key/figure/legend (currently only present on the detail pages).
+ */
+Integration.prototype.showChartFigure = function() {
+	if ( 'detail' !== this.viewName ) {
+		return;
+	}
+	this.$chartFigure.show();
+};
+/**
+ * Hide the chart key/figure/legend.
+ */
+Integration.prototype.hideChartFigure = function() {
+	if ( 'detail' !== this.viewName ) {
+		return;
+	}
+	this.$chartFigure.hide();
+};
+
+/**
+ * @param checkedDates True if dates were checked otherwise false. Prevents error messages from fading in our out more than once per update (occurs on mashboard only).
+ */
+Integration.prototype.updateDataTabData = function( checkedDates ) {
+
+	var $pageErrorContainer = jQuery( '#wpstats-page-error-container' );
+
+	if ( ! checkedDates ) {
+		$pageErrorContainer.fadeOut();
+	}
+
+	if ( 'Facebook' === this.integrationName ) {
+		var $facebookErrorContainer = jQuery( '#wpstats-facebook-error-container' );
+		$facebookErrorContainer.fadeOut();
+		this.$rangeErrorContainer.fadeOut();
+	}
+
+	// Ensure we update the dates used, for all integrations, so the correct date is used when the integration returns
+	// to the data tab.
+	this.startDate = jQuery( '#start_date' ).val();
+	this.endDate = jQuery( '#end_date' ).val();
+
+	if ( 'googleAnalytics' === this.integrationName && 'detail' === this.viewName ) {
+		this.frequency = jQuery( '#frequency' ).val();
+	}
+
+	// If we're viewing or loading the settings tab / setting tab data, do nothing.
+	// Otherwise, fetch new data and display it.
+	if ( this.viewingSettingsTab ) {
+		return;
+	}
+
+	if ( this.loadingSettingsTabData ) {
+		return;
+	}
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();
+		return;
+	}
+
+	var startDateObj = new Date( this.startDate ),
+		startDateInSecs = startDateObj.getTime() / 1000,
+		endDateObj = new Date( this.endDate ),
+		endDateInSecs = endDateObj.getTime() / 1000,
+		minDateInSecs = 1104534000, // January 1st, 2005.
+		currentRangeInSecs = ( endDateObj - startDateObj ) / 1000 + 86400,
+		currentRangeInDays = currentRangeInSecs / 60 / 60 / 24,
+		$pageErrorContainerMsg = $pageErrorContainer.find( '> p' ),
+		error = false;
+
+	if ( currentRangeInDays <= 1 && this.startDate !== this.endDate ) {
+		$pageErrorContainerMsg.html( this.translations[ 'date_range_same' ]);
+		error = true;
+	} else if ( currentRangeInSecs > Date.now() ) {
+		$pageErrorContainerMsg.html( this.translations[ 'date_range_exceeds_today' ]);
+		error = true;
+	} else if ( startDateInSecs < minDateInSecs || endDateInSecs < minDateInSecs ) {
+		$pageErrorContainerMsg.html( this.translations[ 'date_range_below_min' ]);
+		error = true;
+	// For Facebook, allow the update to continue, as 90 days will be collected automatically
+	} else if ( 'Facebook' === this.integrationName ) {
+		if ( currentRangeInDays > 91 ) {
+			var $a = this.$rangeErrorMessage.find( 'a' );
+			$a.attr( 'data-tooltip', this.translations[ 'date_range_exceeds_limit' ] );
+			$a.tooltip({
+				content: $a.attr( 'data-tooltip'),
+				items: '[data-tooltip]'
+			});
+			this.$rangeErrorContainer.fadeIn();
+		}
+	}
+
+	if ( error ) {
+		if ( ! checkedDates ) {
+			$pageErrorContainer.fadeIn();
+		}
+		return;
+	}
+
+	// Reset data
+	this.data = null;
+	if ( 'detail' === this.viewName ) {
+		this.loadedAllData = false;
+	}
+
+	setGlobalPossibleMarkers( null );
+
+	this.disableGridIcon();
+	this.disableSettingsIcon();
+	this.hideChartFigure();
+
+	// Hide/show required elements and fetch and display new data
+	this.loadDataTabData();
+};
+
+Integration.prototype.resizeChart = function() {
+};
+
+Integration.prototype.reinitGridChildrenContent = function() {
+	this.gridIconChildrenContent = jQuery( this.gridIconContentSelector ).html();
+};
+
+Integration.prototype.enableGridIcon = function() {
+	this.$gridIcon.removeClass( 'wpstats-disabled' );
+	this.$gridIcon.tooltip({
+		content: this.$gridIcon.attr( 'data-tooltip' ),
+		items  : '[data-tooltip]'
+	});
+	var curInst = this;
+	this.$gridIcon.on( this.gridClickEventName, function() {
+		var content = '';
+		if ( true === curInst.gridDisplayed ) {
+			content = curInst.$gridIcon.attr( 'data-tooltip' );
+			curInst.$gridIcon.tooltip( 'option', 'content', content );
+			curInst.gridDisplayed = false;
+		} else {
+			curInst.$gridIcon.removeClass( 'wpstats-tooltip' );
+			curInst.gridDisplayed = true;
+
+			// Initially check the boxes of any inputs that correspond to a visible data point
+			var $inputs = jQuery( curInst.gridIconContentSelector ).find( 'input' );
+			$inputs.each( function ( i, v ) {
+				var $this = jQuery( v );
+				if ( jQuery( '#' + $this.val() ).is( ':visible' ) ) {
+					$this.attr( 'checked', true );
+				} else {
+					$this.attr( 'checked', false );
+				}
+			});
+
+			// Now re add the grid content again so our changes take effect (correct boxes ticked).
+			curInst.reinitGridChildrenContent();
+
+			content = curInst.gridIconChildrenContent;
+			curInst.$gridIcon.tooltip( 'destroy' );
+			curInst.$gridIcon.tooltip({
+				content : content,
+				items: curInst.gridIconSelector
+			});
+			curInst.$gridIcon.tooltip( 'open' );
+
+			// Allow the boxes to be checked and unchecked making the corresponding data point show or hide.
+			jQuery( '.wpstats-show-data-point' ).change( function () {
+				var $this = jQuery( this );
+				if ( this.checked ) {
+					jQuery('#' + $this.val() ).show();
+					$this.attr( 'checked', true );
+				} else {
+					jQuery( '#' + $this.val() ).hide();
+					$this.attr( 'checked', false );
+				}
+			});
+		}
+	});
+
+	this.$gridIcon.on( this.gridMouseoverEventName + ' ' + this.gridMouseleaveEventName + ' ' + this.gridMouseoutEventName, function ( e ) {
+		if ( true === curInst.gridDisplayed ) {
+			e.stopImmediatePropagation();
+		}
+	});
+};
+Integration.prototype.disableGridIcon = function() {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		return;
+	}
+
+	this.$gridIcon.addClass( 'wpstats-disabled' );
+	var instance = this.$gridIcon.tooltip( 'instance' );
+	if ( null != instance ) {
+		instance.destroy();
+	}
+	this.$gridIcon.off( this.gridClickEventName + ' ' + this.gridMouseoverEventName + ' ' + this.gridMouseleaveEventName + ' ' + this.gridMouseoutEventName );
+	// Ensures grid does the right thing when clicked after being disabled whilst open.
+	this.gridDisplayed = false;
+};
+
+Integration.prototype.enableSettingsIcon = function() {
+	if ( true === this.settingsIconEnabled ) {
+		return;
+	}
+	var curInst = this;
+	this.$settingsIcon.removeClass( 'wpstats-disabled' );
+	this.$settingsIcon.tooltip({
+		content: this.$settingsIcon.attr( 'data-tooltip' ),
+		items  : '[data-tooltip]'
+	});
+	this.settingsIconEnabled = true;
+	this.$settingsIcon.on( this.settingsClickEventName, function() {
+
+		// load/show data tab
+		if ( true === curInst.viewingSettingsTab ) {
+			if ( true === curInst.loadingDataTabData ) {
+				return;
+			}
+			curInst.viewingSettingsTab = false;
+			curInst.loadingDataTabData = true;
+			curInst.disableSettingsIcon();
+			curInst.loadDataTabData();
+			// load/show settings tab
+		} else if ( true === curInst.viewingDataTab ) {
+			if ( true === curInst.loadingSettingsTabData ) {
+				return;
+			}
+			curInst.viewingDataTab = false;
+			curInst.loadingSettingsTabData = true;
+			curInst.disableGridIcon();
+			curInst.disableSettingsIcon();
+			curInst.loadSettingsTabData( 'cached' );
+		}
+	});
+};
+
+/**
+ * Disable the settings icon tooltip and tab switchability.
+ */
+Integration.prototype.disableSettingsIcon = function() {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		return;
+	}
+
+	if ( false === this.settingsIconEnabled ) {
+		return;
+	}
+	if ( this.$settingsIcon.hasClass( 'wpstats-disabled' ) ) {
+		return;
+	}
+	this.$settingsIcon.addClass( 'wpstats-disabled' );
+
+	this.$settingsIcon.tooltip( 'destroy' );
+
+	this.$settingsIcon.off( this.settingsClickEventName );
+
+	this.settingsIconEnabled = false;
+};
+
+/**
+ * Changes the content of any tooltip element or object.
+ *
+ * @param {jQuery|string} tooltip
+ *
+ * @param {string} content
+ */
+Integration.prototype.changeTooltipContent = function( tooltip, content ) {
+	var instance = null;
+
+	if ( tooltip instanceof jQuery ) {
+		instance = tooltip.tooltip( 'instance' );
+	} else {
+		instance = jQuery( tooltip ).tooltip( 'instance' );
+	}
+
+	if ( null != instance ) {
+		instance.option( 'content', content );
+	}
+};
+
+/**
+ * Create a popup window which allows the user to authorize with the integration.
+ *
+ * @param {String} url            URL to be loaded.
+ * @param {String} name           Name for the window.
+ * @param {Number} width          Width of window.
+ * @param {Number} height         Height of window.
+ * @param {String|Null} features (Optional) Features of window (size, position), can be used to override features.
+ */
+Integration.prototype.createPopupWindow = function( url, name, width, height, features ) {
+	var left = ( screen.width / 2 ) - ( width / 2 ),
+	    top = ( screen.height / 2 ) - ( height / 2 );
+	if ( null == features ) {
+		features = 'toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, copyhistory=no, width=' + width + ', height=' + height + ', top=' + top + ', left=' + left;
+	}
+	this.popupWindow = window.open( url, name, features );
+};
+
+Integration.prototype.displayCurrentUserCannotAccessSettingsError = function() {
+	var selector = '.wpstats-' + this.integrationId + '-settings-access-denied-error';
+	if ( $( selector ).length ) {
+		$( selector ).remove();
+	}
+	if ( this.$loadingContainer ) {
+		this.$loadingContainer.hide();
+	}
+	$( this.$chartContainer ).before( this.$userCannotAccessSettingsError );
+};
+
+// Google Analytics - child
+function GoogleAnalytics( viewName ) {
+	Integration.call( this, viewName );
+	this.integrationName = 'Google Analytics';
+	this.integrationId = 'google-analytics';
+	this.translations = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'trans' ]:
+		wpstats_google_analytics[ 'trans' ];
+
+	this.selectedGoogleAccountEmail = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_analytics' ][ 'selected_google_account_email' ] :
+		wpstats_google_analytics[ 'selected_google_account_email' ];
+
+	this.selectedProfileID = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_analytics' ][ 'selected_profile_id' ] :
+		wpstats_google_analytics[ 'selected_profile_id' ];
+
+	this.data = null;
+	this.$loadingContainer = jQuery( '#wpstats-google-analytics-loading-container' );
+	this.$dataPointsContainer = jQuery( '#wpstats-google-analytics-data-points-container' );
+	this.$dataTableColumnsContent = jQuery( '.wpstats-data-table-column-content' );
+	this.loadingDataTabData = false;
+	this.viewingDataTab = false;
+	this.loadedAllData = false; // Detail specific (true if the chart data, data point and data table data was successfully retrieved, or was at least attempted (but one or more may have failed)
+
+	this.topKeywordsData = null;
+	this.topSearchEngineReferralsData = null;
+	this.topLandingPagesData = null;
+	this.topVisitorLocationsData = null;
+
+	/* Chart */
+	this.chartID = 'wpstats-google-analytics-chart';
+	this.$chart = jQuery( '#' + this.chartID );
+	this.$chartContainer = jQuery( '#wpstats-google-analytics-chart-container' ); // Chart parent
+	this.chartInstance = null;
+	this.frequency = 'daily';
+	this.chartData = [
+		{
+			color: '#FFC951',
+			data: [],
+			label: '' /* Users */
+		},
+		{
+			color: '#FF956C',
+			data: [],
+			label: '' /* Page Views */
+		}
+	];
+
+	/* Grid */
+	this.gridIconSelector = '#wpstats-google-analytics-grid-icon';
+	this.$gridIcon = jQuery( this.gridIconSelector );
+	this.gridIconContentSelector = '#wpstats-google-analytics-grid-icon-content';
+	this.gridIconChildrenContent = jQuery( '#wpstats-google-analytics-grid-icon-content' ).html();
+	this.gridDisplayed = false;
+	this.gridClickEventName = 'click.ga_grid';
+	this.gridMouseoverEventName = 'mouseover.ga_grid';
+	this.gridMouseleaveEventName = 'mouseleave.ga_grid';
+	this.gridMouseoutEventName = 'mouseout.ga_grid';
+
+	/* Settings */
+	this.$settingsIcon = jQuery( '#wpstats-google-analytics-settings-icon' );
+	this.loadingSettingsTabData = false;
+	this.viewingSettingsTab = false;
+
+	// All sections
+	this.$settingsTabSections = jQuery( '.wpstats-google-analytics-settings-tab-section' );
+
+	this.$settingsTabSetupSection = jQuery( '#wpstats-google-analytics-settings-setup-section' );
+	this.$settingsTabReauthorizeSection = jQuery( '#wpstats-google-analytics-settings-reauthorize-section' );
+	this.$settingsTabDeauthorizeSection = jQuery( '#wpstats-google-analytics-settings-deauthorize-section' );
+	this.$settingsTabNoProfilesSection = jQuery( '#wpstats-google-analytics-settings-no-profiles-section' );
+	this.$settingsTabProfilesSection = jQuery( '#wpstats-google-analytics-settings-profiles-section' );
+	this.$settingsTabChooseGoogleAccountSection = jQuery( '#wpstats-google-analytics-settings-choose-google-account-section' );
+	this.$settingsTabAddGoogleAccountSection = jQuery( '#wpstats-google-analytics-settings-add-google-account-section' );
+
+	this.settingsClickEventName = 'click.ga_settings';
+
+	this.$topDataErrorContainers = jQuery( '.wpstats-top-data-error-container' );
+	this.$topKeywordsDataErrorContainer = jQuery( '#wpstats-google-analytics-top-keywords-data-error-container' );
+	this.$topSearchEngineReferralsDataErrorContainer = jQuery( '#wpstats-google-analytics-top-search-engine-referrals-data-error-container' );
+	this.$topLandingPagesDataErrorContainer = jQuery( '#wpstats-google-analytics-top-landing-pages-data-error-container' );
+	this.$topVisitorLocationsDataErrorContainer = jQuery( '#wpstats-google-analytics-top-visitor-locations-data-error-container' );
+
+	this.authPopupWindowIntervalId = null;
+	// URL popup window first directs to authorize the user.
+	this.authPopupWindowURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_analytics' ][ 'auth_popup_window_url' ] :
+		wpstats_google_analytics[ 'auth_popup_window_url' ];
+	// URL popup window directs to when authorization is complete.
+	this.authPopupWindowCompleteURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'auth_popup_window_complete_url' ] :
+		wpstats_google_analytics[ 'auth_popup_window_complete_url' ];
+
+	this.currentUserCanAccessSettings = ( 'mashboard' === viewName ) ? wpstats_mashboard[ 'current_user_can_access_settings' ] : wpstats_google_analytics[ 'current_user_can_access_settings' ];
+	this.userCannotAccessSettingsErrorMsg = this.translations[ 'current_user_settings_access_denied_error' ];
+	this.$userCannotAccessSettingsError = "<p class='wpstats-error-message wpstats-google-analytics-settings-access-denied-error'>" + this.userCannotAccessSettingsErrorMsg + "<p>";
+}
+GoogleAnalytics.prototype = createObject( Integration.prototype );
+GoogleAnalytics.prototype.constructor = GoogleAnalytics;
+
+/**
+ * Called whenever the browser window resizes, to try to resize the chart and any other tasks that need to be performed.
+ */
+GoogleAnalytics.prototype.resizeChart = function() {
+	if ( null != this.data ) {
+		setGlobalPossibleMarkers( null );
+		this.chartInstance.shutdown();
+		this.chartData[ 0 ].data = getChartData( this.data[ 'chart_data' ][ 'users' ], this.$chart, this, this.frequency );
+		this.chartData[ 1 ].data = getChartData( this.data[ 'chart_data' ][ 'page_views' ], this.$chart, this, this.frequency );
+		this.chartInstance = this.$chart.plot( this.chartData, this.chartOptions ).data( 'plot' );
+	}
+};
+
+/**
+ * Load the data for the data tab.
+ */
+GoogleAnalytics.prototype.loadDataTabData = function() {
+	var $frequency = jQuery( '#frequency' );
+	if ( $frequency.length ) {
+		this.frequency = $frequency.val();
+	}
+	if ( 'detail' === this.viewName ) {
+		this.$topDataErrorContainers.fadeOut();
+	}
+	this.viewingSettingsTab = false;
+	this.loadingDataTabData = true;
+	var curInst = this;
+	this.$settingsTabSections
+		.add( this.$chartContainer )
+		.add( this.$dataPointsContainer )
+		.add( this.$dataTableColumnsContent )
+		.fadeOut( 400 ).promise().done( function() {
+		curInst.$loadingContainer.fadeIn( 400, function() {
+			if ( 'mashboard' === curInst.viewName ) {
+				if ( curInst.data ) {
+					curInst.displayDataTabData();
+					return;
+				}
+				jQuery.get( ajaxurl, {
+					action: 'wpstats_ajax_google_analytics_api_query',
+					query: 'get_mashboard_view_data',
+					start_date: curInst.startDate,
+					end_date: curInst.endDate
+				}, function ( response ) {
+					response = jQuery.parseJSON( response );
+					if ( 'success' === response[ 'responseType' ] ) {
+						curInst.data = response.data;
+						curInst.displayDataTabData( response );
+					} else {
+						curInst.loadSettingsTabData( 'fresh' );
+					}
+				});
+			} else if ( 'detail' === curInst.viewName ) {
+				if ( curInst.loadedAllData ) {
+					curInst.displayDataTabData();
+				} else {
+					var detailViewDataDeferredObject = curInst.getDetailViewDataDeferredObject(),
+						topKeywordsDeferredObject = curInst.getTopKeywordsDeferredObject(),
+						topSearchEngineReferralsDeferredObject = curInst.getTopSearchEngineReferralsDeferredObject(),
+						topLandingPagesDeferredObject = curInst.getTopLandingPagesDeferredObject(),
+						topVisitorLocationsDeferredObject = curInst.getTopVisitorLocationsDeferredObject();
+					jQuery.when( detailViewDataDeferredObject, topKeywordsDeferredObject, topSearchEngineReferralsDeferredObject, topLandingPagesDeferredObject, topVisitorLocationsDeferredObject )
+						.done( function( detailViewData, topKeywordsData, topSearchEngineReferralsData, topLandingPagesData, topVisitorLocationsData ) {
+
+							var detailViewDataObj = jQuery.parseJSON( detailViewData[ 0 ] );
+
+							if ( 'error' === detailViewDataObj[ 'responseType' ] ) {
+								curInst.loadSettingsTabData( 'fresh' );
+							} else {
+								// Signal data was retrieved
+								curInst.loadedAllData = true;
+								// Store data
+								curInst.data = jQuery.parseJSON( detailViewData[0] ).data;
+								curInst.topKeywordsData = jQuery.parseJSON( topKeywordsData[0] ).data;
+								curInst.topSearchEngineReferralsData = jQuery.parseJSON( topSearchEngineReferralsData[0] ).data;
+								curInst.topLandingPagesData = jQuery.parseJSON( topLandingPagesData[0] ).data;
+								curInst.topVisitorLocationsData = jQuery.parseJSON( topVisitorLocationsData[0] ).data;
+								// Display data
+								curInst.displayDataTabData();
+							}
+						});
+				}
+			}
+		});
+	});
+};
+GoogleAnalytics.prototype.getDetailViewDataDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_google_analytics_api_query',
+		query: 'get_detail_view_data',
+		start_date: this.startDate,
+		end_date: this.endDate,
+		frequency: this.frequency
+	});
+};
+GoogleAnalytics.prototype.getTopKeywordsDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_get_google_analytics_top_data',
+		data_type: 'keywords',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+GoogleAnalytics.prototype.getTopSearchEngineReferralsDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_get_google_analytics_top_data',
+		data_type: 'search_engine_referrals',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+GoogleAnalytics.prototype.getTopLandingPagesDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_get_google_analytics_top_data',
+		data_type: 'landing_pages',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+GoogleAnalytics.prototype.getTopVisitorLocationsDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_get_google_analytics_top_data',
+		data_type: 'visitor_locations',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+
+/**
+ * Display the data tab data.
+ */
+GoogleAnalytics.prototype.displayDataTabData = function() {
+	var curInst = this;
+	if ( 'detail' === this.viewName ) {
+		this.$topDataErrorContainers.fadeOut();
+	}
+	this.$loadingContainer.fadeOut( 400, function() {
+		curInst.showChartFigure();
+		curInst.$chartContainer.show();
+		curInst.$dataPointsContainer.show();
+
+		// Do we need to destroy the chart?
+		if ( null !== curInst.chartInstance ) {
+			curInst.chartInstance.shutdown();
+		}
+		// Create chart
+		curInst.chartData[ 0 ].data = getChartData( curInst.data[ 'chart_data' ][ 'users' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[ 1 ].data = getChartData( curInst.data[ 'chart_data' ][ 'page_views' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartInstance = curInst.$chart.plot( curInst.chartData, curInst.chartOptions ).data( 'plot' );
+
+		// Users
+		jQuery('#wpstats-google-analytics-users-total').html( curInst.data[ 'users' ] );
+		jQuery('#wpstats-google-analytics-users-change').html( curInst.data[ 'users_change' ] );
+		var $usersChangeInfo = jQuery( '#wpstats-google-analytics-users-change-info' );
+		curInst.changeTooltipContent( $usersChangeInfo, curInst.data[ 'previous_users' ] + ' ' + $usersChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass(
+			'wpstats-google-analytics-users-change-direction',
+			curInst.data[ 'users_change_direction' ],
+			false
+		);
+		setDataPointChangeClass(
+			'wpstats-google-analytics-users-change',
+			curInst.data[ 'users_change_direction' ],
+			false
+		);
+
+		// Page Views
+		jQuery('#wpstats-google-analytics-page-views-total').html( curInst.data[ 'page_views' ] );
+		jQuery('#wpstats-google-analytics-page-views-change').html( curInst.data[ 'page_views_change' ] );
+		var $pageViewsChangeInfo = jQuery( '#wpstats-google-analytics-page-views-change-info' );
+		curInst.changeTooltipContent( $pageViewsChangeInfo, curInst.data[ 'previous_page_views' ] + ' ' + $pageViewsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass(
+			'wpstats-google-analytics-page-views-change-direction',
+			curInst.data[ 'page_views_change_direction' ],
+			false
+		);
+		setDataPointChangeClass(
+			'wpstats-google-analytics-page-views-change',
+			curInst.data[ 'page_views_change_direction' ],
+			false
+		);
+
+		// Donut for bounce rate is currently only used on the mashboard
+		if ( 'mashboard' === curInst.viewName ) {
+
+			var $bounceRateDonut = jQuery( '#wpstats-google-analytics-bounce-rate' );
+
+			$bounceRateDonut.html( '' );
+
+			// If the bounce rate data point was hidden on the data tab and then reopened,
+			// we need it to be visible for our calculations, then we'll hide it and only display it if this wasn't
+			// the case.
+			var $bounceRateDataPoint = jQuery( '#wpstats-google-analytics-bounce-rate-data-point' ),
+				wasBounceRateHidden = false;
+
+			if ( ! $bounceRateDataPoint.is( ':visible' ) ) {
+				wasBounceRateHidden = true;
+				$bounceRateDataPoint.show();
+			}
+
+			/*
+			 Bounce Rate Donut
+			 */
+			var donut = Morris.Donut( {
+				data: [
+					{ label: curInst.data[ 'bounce_rate' ] + '%', value: curInst.data[ 'bounce_rate' ] },
+					{ label: curInst.data[ 'bounce_rate_change' ] + '%', value: 100 - curInst.data[ 'bounce_rate' ] }
+				],
+				element: 'wpstats-google-analytics-bounce-rate',
+				colors: [ '#72aa3f', '#ffffff' ],
+				resize: false,
+				formatter: function () {
+					if ( 'negative' === curInst.data[ 'bounce_rate_change_direction' ] ) {
+						return '▽' + curInst.data[ 'bounce_rate_change' ];
+					} else if ( 'positive' === curInst.data[ 'bounce_rate_change_direction' ] ) {
+						return 'Δ+' + curInst.data[ 'bounce_rate_change' ];
+					} else {
+						return curInst.data[ 'bounce_rate_change' ];
+					}
+				}
+			} );
+			donut.select( 0 );
+
+			var $donutSvg = $bounceRateDonut.find( 'svg' );
+			var $donutSvgChildren = $donutSvg.children();
+
+			// Remove outer/inner colored path stroke, inner colored path stroke, and outer/inner white path stroke
+			$donutSvgChildren.eq( 2 ).css( 'stroke', 'none' ).end()
+				.eq( 3 ).css( 'stroke', 'none' ).end()
+				.eq( 4 ).css( 'stroke', 'none' ).end()
+				.eq( 5 ).css( 'stroke', 'none' ).css( 'fill', '#eeeeee' );
+			var $bounceRate = $donutSvgChildren.eq( 6 );
+			$bounceRate.html( '<tspan>' + curInst.data[ 'bounce_rate' ] + '</tspan><tspan dy="-7" dx="0" style="font-size:16px;">%</tspan>' );
+			$bounceRate.attr( 'class', 'wpstats-donut-value' );
+			$bounceRate.attr( 'font-size', '25px' );
+			$bounceRate.attr( 'y', '70' );
+			$donutSvg.css( 'left', '-10%' );
+
+			var $bounceRateChange = $donutSvgChildren.eq( 7 ).find( 'tspan' );
+
+			switch ( curInst.data[ 'bounce_rate_change_direction' ] ) {
+				case 'positive':
+					$bounceRateChange.attr( 'class', 'wpstats-data-point-change wpstats-data-point-change-negative' );
+					break;
+				case 'negative':
+					$bounceRateChange.attr( 'class', 'wpstats-data-point-change wpstats-data-point-change-positive' );
+					break;
+				default:
+					$bounceRateChange.attr( 'class', 'wpstats-data-point-change' );
+					break;
+			}
+
+			setDataPointChangeDirectionClass(
+				'wpstats-google-analytics-bounce-rate-change-direction',
+				curInst.data[ 'bounce_rate_change_direction' ],
+				false
+			);
+
+			$bounceRateChange
+				.attr( 'fill', $bounceRateChange.css( 'color' ) )
+				.css( 'font-size', '19px' )
+				.attr( 'dy', '6' );
+
+			var $bounceRateChangePercentSymbol = jQuery( '<tspan dy="-4" dx="2" fill="' + $bounceRateChange.css( 'color' ) + '" style="font-size: 12px;">%</tspan>' );
+			$bounceRateChangePercentSymbol.appendTo( $bounceRateChange );
+
+			$bounceRateDonut.html( $bounceRateDonut.html() );
+
+			$bounceRateChange = null;
+
+			if ( wasBounceRateHidden && $bounceRateDataPoint.is( ':visible' ) ) {
+				$bounceRateDataPoint.hide();
+			}
+		} // endif view is mashboard
+
+		// These data points are unique to the detail page
+		if ( 'detail' === curInst.viewName ) {
+
+			// Pages Per Visit
+			jQuery( '#wpstats-google-analytics-pages-per-visit-total' ).html( curInst.data[ 'pages_per_visit' ] );
+			jQuery( '#wpstats-google-analytics-pages-per-visit-change' ).html( curInst.data[ 'pages_per_visit_change' ] );
+			var $pagesPerVisitChangeInfo = jQuery( '#wpstats-google-analytics-pages-per-visit-change-info' );
+			curInst.changeTooltipContent( $pagesPerVisitChangeInfo, curInst.data[ 'previous_pages_per_visit' ] + ' ' + $pagesPerVisitChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-analytics-pages-per-visit-change-direction', curInst.data[ 'pages_per_visit_change_direction' ], false );
+			setDataPointChangeClass( 'wpstats-google-analytics-pages-per-visit-change', curInst.data[ 'pages_per_visit_change_direction' ], false );
+
+			// Average Visit Duration (min:sec)
+			jQuery( '#wpstats-google-analytics-average-visit-duration-total' ).html( curInst.data[ 'average_visit_duration' ] );
+			jQuery( '#wpstats-google-analytics-average-visit-duration-change' ).html( curInst.data[ 'average_visit_duration_change' ] );
+			var $averageVisitDurationChangeInfo = jQuery( '#wpstats-google-analytics-average-visit-duration-change-info' );
+			curInst.changeTooltipContent( $averageVisitDurationChangeInfo, curInst.data[ 'previous_average_visit_duration' ] + ' ' + $averageVisitDurationChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-analytics-average-visit-duration-change-direction', curInst.data[ 'average_visit_duration_change_direction' ], false );
+			setDataPointChangeClass( 'wpstats-google-analytics-average-visit-duration-change', curInst.data[ 'average_visit_duration_change_direction' ], false );
+
+			// Bounce Rate
+			var $bounceRateTotal = jQuery( '#wpstats-google-analytics-bounce-rate-total' );
+			$bounceRateTotal.html( curInst.data[ 'bounce_rate' ] );
+			$bounceRateChange = jQuery( '#wpstats-google-analytics-bounce-rate-change' );
+			$bounceRateChange.html( curInst.data[ 'bounce_rate_change' ] );
+			var $bounceRateChangeInfo = jQuery( '#wpstats-google-analytics-bounce-rate-change-info' );
+			curInst.changeTooltipContent( $bounceRateChangeInfo, curInst.data[ 'previous_bounce_rate' ] + ' ' + $bounceRateChangeInfo.attr( 'data-tooltip-backup' ) );
+			var direction = 'neutral';
+			if ( 'neutral' === curInst.data[ 'bounce_rate_change_direction' ] ) {
+				setDataPointChangeDirectionClass('wpstats-google-analytics-bounce-rate-change-direction', 'neutral', false );
+				setDataPointChangeClass('wpstats-google-analytics-bounce-rate-change', 'neutral', false );
+			} else {
+				var $bounceRateChangeDirection = jQuery( '#wpstats-google-analytics-bounce-rate-change-direction' );
+
+				if ( 'positive' === curInst.data[ 'bounce_rate_change_direction' ] ) {
+
+					$bounceRateChange.attr( 'class','wpstats-data-point-change wpstats-data-point-change-increase-negative' );
+					$bounceRateChangeDirection.attr( 'class', 'wpstats-data-point-change-direction-increase-negative' );
+
+				} else if ( 'negative' === curInst.data[ 'bounce_rate_change_direction' ] ) {
+
+					$bounceRateChange.attr( 'class', 'wpstats-data-point-change wpstats-data-point-change-decrease-positive' );
+					$bounceRateChangeDirection.attr( 'class', 'wpstats-data-point-change-direction-decrease-positive' );
+				}
+			}
+
+			// Top Keywords Data
+			(function() {
+				var $table = jQuery( '#wpstats-google-analytics-top-keywords-data-table' ),
+					$tbody = $table.find( '> tbody' );
+				if ( null == curInst.topKeywordsData || ! curInst.topKeywordsData.length ) {
+					$table.hide();
+					curInst.$topKeywordsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					var rows = '';
+					jQuery.each( curInst.topKeywordsData, function ( unused, data ) {
+						rows += '<tr><td>' + data[ 'keyword' ] + '</td><td>' + data[ 'visits' ] + '</td><td>' + data[ 'percent' ] + '</td></tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				jQuery( '#wpstats-detail-google-analytics-top-keywords-data-table-column-content' ).fadeIn();
+			})();
+
+			// Top Search Engine Referrals
+			(function() {
+				var $table = jQuery( '#wpstats-google-analytics-top-search-engine-referrals-data-table' ),
+					$tbody = $table.find( '> tbody' );
+				if ( null == curInst.topSearchEngineReferralsData || ! curInst.topSearchEngineReferralsData.length ) {
+					$table.hide();
+					curInst.$topSearchEngineReferralsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					var rows = '';
+					jQuery.each( curInst.topSearchEngineReferralsData, function ( unused, data ) {
+						rows += '<tr><td>' + data[ 'search_engine' ] + '</td><td>' + data[ 'visits' ] + '</td><td>' + data[ 'percent' ] + '</td></tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				jQuery( '#wpstats-detail-google-analytics-top-search-engine-referrals-data-table-column-content' ).fadeIn();
+			})();
+
+			// Top Landing Pages
+			(function() {
+				var $table = jQuery( '#wpstats-google-analytics-top-landing-pages-data-table' ),
+					$tbody = $table.find( '> tbody' );
+				if ( null == curInst.topLandingPagesData || ! curInst.topLandingPagesData.length ) {
+					$table.hide();
+					curInst.$topLandingPagesDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					var rows = '';
+					jQuery.each( curInst.topLandingPagesData, function ( unused, data ) {
+						rows += '<tr><td>' + data[ 'page' ] + '</td><td>' + data[ 'visits' ] + '</td><td>' + data[ 'percent' ] + '</td></tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				jQuery( '#wpstats-detail-google-analytics-top-landing-pages-data-table-column-content' ).fadeIn();
+			})();
+
+			// Top Visitor Locations
+			(function() {
+				var $table = jQuery( '#wpstats-google-analytics-visitor-locations-data-table' ),
+					$tbody = $table.find( '> tbody' );
+				if ( null == curInst.topVisitorLocationsData || ! curInst.topVisitorLocationsData.length ) {
+					$table.hide();
+					curInst.$topVisitorLocationsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					var rows = '';
+					jQuery.each( curInst.topVisitorLocationsData, function ( unused, data ) {
+						rows += '<tr><td>' + data[ 'country' ] + '</td><td>' + data[ 'visits' ] + '</td><td>' + data[ 'percent' ] + '</td></tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				jQuery('#wpstats-detail-google-analytics-top-visitor-locations-data-table-column-content').fadeIn();
+			})();
+		}
+
+		/*
+		 Search Engine Visits
+		 */
+		jQuery( '#wpstats-google-analytics-search-engine-visits-total' ).html( curInst.data[ 'search_engine_visits' ] );
+		jQuery( '#wpstats-google-analytics-search-engine-visits-change' ).html( curInst.data[ 'search_engine_visits_change' ] );
+		var $searchEngineVisitsChangeInfo = jQuery( '#wpstats-google-analytics-search-engine-visits-change-info' );
+		curInst.changeTooltipContent( $searchEngineVisitsChangeInfo, curInst.data[ 'previous_search_engine_visits' ] + ' ' + $searchEngineVisitsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass(
+			'wpstats-google-analytics-search-engine-visits-change-direction',
+			curInst.data[ 'search_engine_visits_change_direction' ],
+			false
+		);
+		setDataPointChangeClass(
+			'wpstats-google-analytics-search-engine-visits-change',
+			curInst.data[ 'search_engine_visits_change_direction' ],
+			false
+		);
+
+		curInst.enableGridIcon();
+		curInst.enableSettingsIcon();
+
+		curInst.loadingDataTabData = false;
+		curInst.viewingDataTab = true;
+	});
+};
+
+/**
+ * Enable the grid icons tooltip and data point show/hide toggle ability.
+ */
+GoogleAnalytics.prototype.enableGridIcon = function() {
+	Integration.prototype.enableGridIcon.call( this );
+};
+
+/**
+ * Disable the grid icons tooltip and data point show/hide toggle ability.
+ */
+GoogleAnalytics.prototype.disableGridIcon = function() {
+	Integration.prototype.disableGridIcon.call( this );
+};
+
+/**
+ * Enable the settings icon tooltip and tab switchability.
+ */
+GoogleAnalytics.prototype.enableSettingsIcon = function() {
+	Integration.prototype.enableSettingsIcon.call( this );
+};
+
+/**
+ * Disable the settings icon tooltip and tab switchability.
+ */
+GoogleAnalytics.prototype.disableSettingsIcon = function() {
+	Integration.prototype.disableSettingsIcon.call( this );
+};
+
+/**
+ * Load the data for the settings tab.
+ *
+ * @param {string} requestType 'fresh' to retrieve results directly from API, otherwise 'cached' to try to return cached results first, then fresh second.
+ */
+GoogleAnalytics.prototype.loadSettingsTabData = function( requestType ) {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();
+		return;
+	}
+
+	this.hideChartFigure();
+	this.$topDataErrorContainers.fadeOut();
+	var curInst = this,
+		$fadeOutObjects = ( 'mashboard' === this.viewName ) ?
+			this.$dataPointsContainer.add( this.$chartContainer ) :
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.$dataTableColumnsContent );
+	$fadeOutObjects.fadeOut( 400 ).promise().done( function() {
+		curInst.$loadingContainer.fadeIn( 400, function() {
+				jQuery.get( ajaxurl, {
+					action: 'wpstats_ajax_google_analytics_api_query',
+					query: 'get_profiles',
+					request_type: requestType
+				}, function ( response ) {
+					response = jQuery.parseJSON( response );
+					curInst.displaySettingsTabData( response );
+				});
+			//}
+		});
+	});
+};
+
+/**
+ * Loads and adds support for saving a Google Account.
+ */
+GoogleAnalytics.prototype.getGoogleAccounts = function() {
+	var curInst = this;
+	jQuery.get(ajaxurl, {
+		action: 'wpstats_ajax_google_analytics_api_query',
+		query: 'get_google_accounts'
+	}, function (response) {
+		response = jQuery.parseJSON(response);
+		curInst.$loadingContainer.fadeOut(400, function () {
+			if ( 'success' === response[ 'responseType' ]) {
+				var $googleAccountsSelect = jQuery('#wpstats-google-analytics-google-accounts'),
+					googleAccountsSelectHTML = '';
+				jQuery.each(response.data, function (id, email) {
+					var emailStr = email.toString(),
+						selected = curInst.selectedGoogleAccountEmail == email ? 'selected="selected"' : '';
+					googleAccountsSelectHTML += '<option value="' + emailStr + '" ' + selected + '>' + emailStr + '</option>';
+				});
+				$googleAccountsSelect.html(googleAccountsSelectHTML);
+				curInst.$settingsTabChooseGoogleAccountSection.fadeIn();
+				$googleAccountsSelect.chosen({
+					max_selected_options: 1,
+					width: '100%'
+				});
+				$googleAccountsSelect.trigger('chosen:updated');
+				var $saveGoogleAccount = jQuery('#wpstats-google-analytics-save-google-account');
+				$saveGoogleAccount.off('click');
+				$saveGoogleAccount.one('click', function (e) {
+					e.preventDefault();
+					curInst.disableSettingsIcon();
+					var email = $googleAccountsSelect.val();
+					curInst.selectedGoogleAccountEmail = email;
+					curInst.$settingsTabSections.fadeOut(400).promise().done(function () {
+						curInst.$loadingContainer.fadeIn(400, function () {
+							jQuery.post(ajaxurl, {
+								action: 'wpstats_ajax_google_analytics_save_google_account_email',
+								email: email
+							}, function () {
+								curInst.loadSettingsTabData('cached');
+							});
+						});
+					});
+				});
+			}
+			curInst.$settingsTabAddGoogleAccountSection.fadeIn();
+			curInst.$loadingContainer.fadeOut();
+			curInst.registerAuthorizationClickHandler();
+		});
+	});
+};
+
+/**
+ * Display the settings tab with supplied data.
+ *
+ * @param response JSON decoded profile data for the settings tab.
+ */
+GoogleAnalytics.prototype.displaySettingsTabData = function( response ) {
+
+	var curInst = this;
+
+	if ( 'error' === response[ 'responseType' ] && 'missing_google_account' === response[ 'responseContext' ] ) {
+		curInst.getGoogleAccounts();
+		return;
+	}
+
+	curInst.$loadingContainer.fadeOut( 400, function () {
+		if ( 'success' === response[ 'responseType' ] ) {
+			var selectHTML = '',
+				$profiles = jQuery( '#ga-profiles' );
+			jQuery.each( response.data, function( propertyId, propertyData ) {
+				jQuery.each( propertyData, function( propertyName, views ) {
+					selectHTML += '<optgroup label="' + propertyName + '">';
+					jQuery.each( views, function( idx, data ) {
+						var selected = ( curInst.selectedProfileID == data.id ) ? 'selected="selected"' : '';
+						selectHTML += '<option value="' + data.id.toString() + '" ' + selected + '>' + data.name.toString() + '</option>';
+					});
+					selectHTML += '</optgroup>';
+				});
+			});
+			$profiles.html( selectHTML );
+
+			curInst.$settingsTabProfilesSection.fadeIn();
+			$profiles.chosen({
+				max_selected_options: 1,
+				width: '100%'
+			});
+			$profiles.trigger('chosen:updated');
+
+			// When a profile is selected and 'Save' is clicked.
+			var $saveGAProfileID = jQuery( '#save_ga_profile' );
+			$saveGAProfileID.off( 'click' );
+			$saveGAProfileID.one( 'click', function( e ) {
+				e.preventDefault();
+				curInst.disableSettingsIcon();
+				var profileID = $profiles.val();
+				curInst.selectedProfileID = profileID;
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_google_analytics_save_profile_id',
+							profile_id: profileID
+						}, function () {
+							// Reset data - important!
+							curInst.data = null;
+							if ( 'detail' === curInst.viewName ) {
+								curInst.loadedAllData = false;
+							}
+							curInst.loadDataTabData();
+						});
+					});
+				});
+			});
+			curInst.$settingsTabDeauthorizeSection.fadeIn();
+
+		} else {
+			switch ( response[ 'responseContext' ] ) {
+				case 'authorization_required':
+					curInst.$settingsTabSetupSection.fadeIn();
+					break;
+				case 'reauthorization_required':
+					curInst.$settingsTabReauthorizeSection.fadeIn();
+					break;
+				case 'no_profiles':
+					curInst.$settingsTabNoProfilesSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+				default: // deauthorize
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		}
+
+		curInst.viewingSettingsTab = true;
+		curInst.loadingSettingsTabData = false;
+
+		// Enable settings icon if there is data
+		if ( null != curInst.data ) {
+			curInst.enableSettingsIcon();
+		}
+
+		// Setup
+		if ( curInst.$settingsTabSetupSection.is( ':visible' ) ) {
+			var $authorizeReauthorize = jQuery( '#wpstats-google-analytics-authorize' );
+			$authorizeReauthorize.off( 'click' );
+			$authorizeReauthorize.on('click', function( event ) {
+				event.preventDefault();
+				var $fadeOutObjects = curInst.$settingsTabSetupSection;
+				$fadeOutObjects.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn(400, function () {
+						curInst.getGoogleAccounts();
+					});
+				});
+			});
+		}
+
+		curInst.registerAuthorizationClickHandler();
+
+		if ( curInst.$settingsTabDeauthorizeSection.is( ':visible' ) ) {
+			// When 'Deauthorize' is clicked.
+			var $deauthorize = jQuery( '#wpstats-google-analytics-deauthorize'),
+				$deauthorizeAccountLicenseWide = jQuery( '#wpstats-google-analytics-deauthorize-account-license-wide'),
+				$deauthorizeAccountsLicenseWide = jQuery( '#wpstats-google-analytics-deauthorize-accounts-license-wide');
+			// Deauthorize
+			$deauthorize.off( 'click' );
+			$deauthorize.one( 'click', function( event ) {
+				event.preventDefault();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_google_analytics_deauthorize'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						});
+					});
+				});
+			});
+			// Deauthorize Google Account License-wide
+			$deauthorizeAccountLicenseWide.off( 'click' );
+			$deauthorizeAccountLicenseWide.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_google_analytics_deauthorize',
+							deauthorize_type: 'deauthorizeAccountLicenseWide'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						});
+					});
+				});
+			});
+			// Deauthorize ALL Google Accounts License-wide
+			$deauthorizeAccountsLicenseWide.off( 'click' );
+			$deauthorizeAccountsLicenseWide.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_google_analytics_deauthorize',
+							deauthorize_type: 'deauthorizeAllAccountsLicenseWide'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						});
+					});
+				});
+			});
+		}
+	});
+};
+
+GoogleAnalytics.prototype.registerAuthorizationClickHandler = function() {
+	var curInst = this;
+	// Display popup to authorize with Google when the user chooses a new Google account or reauthorizes
+	if ( curInst.$settingsTabAddGoogleAccountSection.is(':visible' ) || curInst.$settingsTabReauthorizeSection.is( ':visible' ) ) {
+		var $button = jQuery( '#wpstats-google-analytics-add-google-account, #wpstats-google-analytics-reauthorize' );
+		$button.off( 'click' );
+		$button.on('click', function( event ) {
+			event.preventDefault();
+			curInst.selectedGoogleAccountEmail = null;
+			jQuery.post( ajaxurl, {
+				action: 'wpstats_ajax_google_analytics_reset_google_account_email'
+			});
+			curInst.selectedGoogleAccountEmail = null;
+			if ( null != curInst.authPopupWindowIntervalId ) {
+				clearInterval( curInst.authPopupWindowIntervalId );
+			}
+			curInst.createPopupWindow( curInst.authPopupWindowURL, 'GoogleAnalyticsAuthPopup', 900, 500, null );
+			curInst.authPopupWindowIntervalId = setInterval( function() {
+				try {
+					if ( null == curInst.popupWindow || curInst.popupWindow.closed ) {
+						clearInterval( curInst.authPopupWindowIntervalId );
+					}
+					if ( curInst.authPopupWindowCompleteURL === curInst.popupWindow.location.href || curInst.authPopupWindowCompleteURL + '#' === curInst.popupWindow.location.href )  {
+						curInst.popupWindow.close();
+						clearInterval( curInst.authPopupWindowIntervalId );
+						curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+							curInst.loadSettingsTabData( 'fresh' );
+						});
+					}
+				} catch (e) {
+				}
+			}, 100 );
+		});
+	}
+};
+
+/**
+ * Update the data tab, or if on the settings tab (or loading it), do nothing.
+ */
+GoogleAnalytics.prototype.updateDataTabData = function( checkedDates ) {
+	Integration.prototype.updateDataTabData.call( this, checkedDates );
+};
+
+// Facebook - child
+function Facebook( viewName ) {
+
+	Integration.call( this, viewName );
+
+	this.integrationName = 'Facebook';
+	this.integrationId = 'facebook';
+
+	this.$loadingContainer = jQuery( '#wpstats-facebook-loading-container' );
+
+	this.translations = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'trans' ]:
+		wpstats_facebook[ 'trans' ];
+
+	/* Data */
+	this.selectedPageID = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'facebook' ][ 'selected_page_id' ] :
+		wpstats_facebook[ 'selected_page_id' ];
+	this.data = null; // Contains data for the chart and data points.
+	this.loadingDataTabData = false;
+	this.viewingDataTab = false;
+	this.loadedAllData = false; // Detail page specific. Whether all data was successfully loaded or at least attempted.
+	this.topPostsData = null; // Detail specific
+	this.$dataTableColumnsContent = jQuery( '.wpstats-data-table-column-content'  );
+
+	/* Data Points */
+	this.$dataTabContent = jQuery( '#wpstats-facebook-data-tab-content' );
+	this.$dataPointsContainer = jQuery( '#wpstats-facebook-data-points-container' );
+
+	/* Chart */
+	this.chartInstance = null;
+	this.chartID = 'wpstats-facebook-chart';
+	this.$chart = jQuery( '#' + this.chartID );
+	this.$chartContainer = jQuery( '#wpstats-facebook-chart-container' );
+	this.chartData = [
+		{
+			color: '#3b5999',
+			data: [],
+			label: '' /* Total Likes */
+		},
+		{
+			color: '#5890ff',
+			data: [],
+			label: '' /* Total Reach */
+		}
+	];
+
+	/* Grid */
+	this.gridIconSelector = '#wpstats-facebook-grid-icon';
+	this.$gridIcon = jQuery( this.gridIconSelector );
+	this.gridIconContentSelector = '#wpstats-facebook-grid-icon-content';
+	this.gridIconChildrenContent = jQuery( '#wpstats-facebook-grid-icon-content' ).html();
+	this.gridDisplayed = false;
+	this.gridClickEventName = 'click.fb_grid';
+	this.gridMouseoverEventName = 'mouseover.fb_grid';
+	this.gridMouseleaveEventName = 'mouseleave.fb_grid';
+	this.gridMouseoutEventName = 'mouseout.fb_grid';
+
+	/* Settings */
+	this.loadingSettingsTabData = false;
+	this.viewingSettingsTab = false;
+	this.$settingsIcon = jQuery( '#wpstats-facebook-settings-icon');
+	this.$settingsTabSections = jQuery( '.wpstats-facebook-settings-tab-section' );
+	this.$settingsTabNoPagesSection = jQuery( '#wpstats-facebook-settings-no-pages-section' );
+	this.$settingsTabPageSelectionSection = jQuery( '#wpstats-facebook-settings-page-selection-section' );
+	this.$settingsTabReauthorizeSection = jQuery( '#wpstats-facebook-settings-reauthorize-section' );
+	this.$settingsTabDeauthorizeSection = jQuery( '#wpstats-facebook-settings-deauthorize-section' );
+	this.$settingsTabAuthorizeSection = jQuery( '#wpstats-facebook-settings-authorize-section' );
+	this.settingsClickEventName = 'click.fb_settings';
+
+	this.$topDataErrorContainers = jQuery( '.wpstats-top-data-error-container' );
+	this.$topPostsDataErrorContainer = jQuery( '#wpstats-facebook-top-posts-data-error-container' );
+
+	this.$rangeErrorContainer = jQuery( '#wpstats-facebook-range-error-container' );
+	this.$rangeErrorMessage = jQuery( '#wpstats-facebook-range-error' );
+
+	this.authPopupWindowIntervalId = null;
+	// URL popup window first directs to authorize the user.
+	this.authPopupWindowURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'facebook' ][ 'auth_popup_window_url' ] :
+		wpstats_facebook[ 'auth_popup_window_url' ];
+	// URL popup window directs to when authorization is complete.
+	this.authPopupWindowCompleteURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'auth_popup_window_complete_url' ] :
+		wpstats_facebook[ 'auth_popup_window_complete_url' ];
+
+	this.currentUserCanAccessSettings = ( 'mashboard' === viewName ) ? wpstats_mashboard[ 'current_user_can_access_settings' ] : wpstats_facebook[ 'current_user_can_access_settings' ];
+	this.userCannotAccessSettingsErrorMsg = this.translations[ 'current_user_settings_access_denied_error' ];
+	this.$userCannotAccessSettingsError = "<p class='wpstats-error-message wpstats-facebook-settings-access-denied-error'>" + this.userCannotAccessSettingsErrorMsg + "<p>";
+}
+Facebook.prototype = createObject( Integration.prototype );
+Facebook.prototype.constructor = Facebook;
+
+/**
+ * Load data for the data tab.
+ */
+Facebook.prototype.loadDataTabData = function() {
+	this.hideChartFigure();
+	this.viewingSettingsTab = false;
+	this.loadingDataTabData = true;
+	var curInst = this;
+	this.$topDataErrorContainers.fadeOut();
+
+	this.$settingsTabSections
+		.add( this.$chartContainer )
+		.add( this.$dataPointsContainer )
+		.add( this.$dataTableColumnsContent )
+		.fadeOut( 400 ).promise().done( function() {
+		curInst.$loadingContainer.fadeIn( 400, function() {
+			if ( 'mashboard' === curInst.viewName ) {
+				// If data exists and the settings icon was clicked, just display the data.
+				if ( null != curInst.data ) {
+					curInst.displayDataTabData();
+					return;
+				}
+				jQuery.get( ajaxurl, {
+					action: 'wpstats_ajax_facebook_get_mashboard_view_data',
+					start_date: curInst.startDate,
+					end_date: curInst.endDate
+				}, function ( response ) {
+					response = jQuery.parseJSON( response );
+					if ( null != response.data ) {
+						curInst.data = response.data;
+						curInst.displayDataTabData();
+					} else {
+						curInst.loadSettingsTabData( 'fresh' );
+					}
+				} );
+			} else if ( 'detail' === curInst.viewName ) {
+				if ( true === curInst.loadedAllData ) {
+					curInst.displayDataTabData();
+				} else {
+					var detailViewDataDeferredObject = curInst.getDetailViewDataDeferredObject(),
+						topPostsDataDeferredObject = curInst.getTopPostsDeferredObject();
+					jQuery.when( detailViewDataDeferredObject, topPostsDataDeferredObject).done( function ( detailViewData, topPostsData ) {
+						var detailViewDataObj = jQuery.parseJSON( detailViewData[0] );
+						if ( 'error' === detailViewDataObj[ 'responseType' ] ) {
+							curInst.loadSettingsTabData( 'fresh' );
+						} else {
+							curInst.loadedAllData = true;
+							curInst.data = jQuery.parseJSON( detailViewData[0] ).data;
+							curInst.topPostsData = jQuery.parseJSON( topPostsData[0] ).data;
+							curInst.displayDataTabData();
+						}
+					});
+				}
+			}
+		});
+	});
+};
+
+Facebook.prototype.getDetailViewDataDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_facebook_get_detail_view_data',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+Facebook.prototype.getTopPostsDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_facebook_get_page_top_posts',
+		start_date: this.startDate,
+		end_date: this.endDate
+	});
+};
+
+/**
+ * Display the data for the data tab.
+ */
+Facebook.prototype.displayDataTabData = function() {
+	var curInst = this;
+	if ( 'detail' === this.viewName ) {
+		this.$topDataErrorContainers.fadeOut();
+	}
+	this.$loadingContainer.fadeOut( 400, function() {
+
+		curInst.showChartFigure();
+		curInst.$dataTabContent.fadeIn();
+		curInst.$chartContainer.show();
+
+		// Do we need to destroy the chart?
+		if ( null !== curInst.chartInstance ) {
+			curInst.chartInstance.shutdown();
+		}
+		// Create chart
+		curInst.chartData[ 0 ].data = getChartData( curInst.data[ 'chart_data' ][ 'likes' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[ 1 ].data = getChartData( curInst.data[ 'chart_data' ][ 'reach' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartInstance = curInst.$chart.plot( curInst.chartData, curInst.chartOptions ).data( 'plot' );
+
+		curInst.$dataPointsContainer.show();
+
+		// Total Likes
+		jQuery( '#wpstats-facebook-total-likes-total' ).html( curInst.data[ 'total_likes' ] );
+		jQuery( '#wpstats-facebook-total-likes-change' ).html( curInst.data[ 'total_likes_change' ] );
+		var $totalLikesChangeInfo = jQuery( '#wpstats-facebook-total-likes-change-info' );
+		curInst.changeTooltipContent( $totalLikesChangeInfo, curInst.data[ 'previous_total_likes' ]  + ' ' + $totalLikesChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-facebook-total-likes-change-direction', curInst.data[ 'total_likes_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-facebook-total-likes-change', curInst.data[ 'total_likes_change_direction' ], false );
+
+		// Total Reach
+		jQuery( '#wpstats-facebook-total-reach-total' ).html( curInst.data[ 'total_reach' ] );
+		jQuery( '#wpstats-facebook-total-reach-change' ).html( curInst.data[ 'total_reach_change' ] );
+		var $totalReachChangeInfo = jQuery( '#wpstats-facebook-total-reach-change-info' );
+		curInst.changeTooltipContent( $totalReachChangeInfo, curInst.data[ 'previous_total_reach' ] + ' ' + $totalReachChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-facebook-total-reach-change-direction', curInst.data[ 'total_reach_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-facebook-total-reach-change', curInst.data[ 'total_reach_change_direction' ], false );
+
+		// Page Views
+		jQuery( '#wpstats-facebook-page-visits-total' ).html( curInst.data[ 'page_views' ] );
+		jQuery( '#wpstats-facebook-page-visits-change' ).html( curInst.data[ 'page_views_change' ] );
+		var $pageViewsChangeInfo = jQuery( '#wpstats-facebook-page-visits-change-info' );
+		curInst.changeTooltipContent( $pageViewsChangeInfo, curInst.data[ 'previous_page_views' ] + ' ' + $pageViewsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass('wpstats-facebook-page-visits-change-direction', curInst.data[ 'page_views_change_direction' ], false );
+		setDataPointChangeClass('wpstats-facebook-page-visits-change', curInst.data[ 'page_views_change_direction' ], false );
+
+		// People Engaged
+		jQuery( '#wpstats-facebook-people-engaged-total' ).html( curInst.data[ 'people_engaged' ] );
+		jQuery( '#wpstats-facebook-people-engaged-change' ).html( curInst.data[ 'people_engaged_change' ] );
+		var $peopleEngagedChangeInfo = jQuery( '#wpstats-facebook-people-engaged-change-info' );
+		curInst.changeTooltipContent( $peopleEngagedChangeInfo, curInst.data[ 'previous_people_engaged' ] + ' ' + $peopleEngagedChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-facebook-people-engaged-change-direction', curInst.data[ 'people_engaged_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-facebook-people-engaged-change', curInst.data[ 'people_engaged_change_direction' ], false );
+
+		if ( 'detail' === curInst.viewName ) {
+			var $topPostsDataTableTbody = jQuery( '#wpstats-facebook-top-posts-data-table-tbody' ),
+				rows = '',
+				$topPostsDataTable = $topPostsDataTableTbody.parent();
+			if ( null == curInst.topPostsData || ! curInst.topPostsData.length ) {
+				$topPostsDataTable.hide();
+				curInst.$topPostsDataErrorContainer.show();
+			} else {
+				$topPostsDataTableTbody.html( '' );
+				jQuery.each( curInst.topPostsData, function ( unused, data ) {
+					rows += '<tr>' +
+					'<td>' + data[ 'name' ] + '</td>' +
+					'<td>' + data[ 'likes' ] + '</td>' +
+					'<td>' + data[ 'reach' ] + '</td>' +
+					'<td>' + data[ 'comments' ] + '</td>' +
+					'<td>' + data[ 'date' ] + '</td>' +
+					'</tr>';
+				} );
+				$topPostsDataTable.show();
+				jQuery( rows ).appendTo( $topPostsDataTableTbody );
+			}
+			jQuery( '#wpstats-facebook-top-posts-data-table-column-content' ).fadeIn();
+		}
+
+		curInst.enableGridIcon();
+		curInst.enableSettingsIcon();
+
+		curInst.loadingDataTabData = false;
+		curInst.viewingDataTab = true;
+	});
+};
+
+/**
+ * Load settings tab data.
+ *
+ * @param {string} requestType Whether to request fresh or cached results. Important when there is an error, and we must request fresh results.
+ */
+Facebook.prototype.loadSettingsTabData = function( requestType ) {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();
+		return;
+	}
+
+	this.hideChartFigure();
+	this.$topDataErrorContainers.fadeOut();
+	this.$rangeErrorContainer.fadeOut();
+	var curInst = this,
+		$fadeOutObjects = ( 'mashboard' === this.viewName ) ?
+			this.$dataPointsContainer.add( this.$chartContainer ) :
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.$dataTableColumnsContent );
+
+	$fadeOutObjects.fadeOut( 400 ).promise().done( function () {
+		curInst.$loadingContainer.fadeIn( 400, function () {
+			jQuery.get( ajaxurl, {
+				action: 'wpstats_ajax_facebook_get_page_list',
+				request_type: requestType
+			}, function ( response ) {
+				response = jQuery.parseJSON( response );
+				curInst.displaySettingsTabData( response );
+			});
+		});
+	});
+};
+
+/**
+ * Display settings tab data.
+ *
+ * @param {Object} response Settings tab response data.
+ */
+Facebook.prototype.displaySettingsTabData = function( response ) {
+	var curInst = this;
+
+	curInst.$loadingContainer.fadeOut( 400, function () {
+
+		if ( 'success' === response[ 'responseType' ] ) {
+			// Populate page selection
+			var selectHTML = '',
+				$pages = jQuery( '#wpstats-facebook-page-list' );
+			jQuery.each( response.data, function ( i, page ) {
+				var selected = ( curInst.selectedPageID === page.id ) ? 'selected="selected"' : '';
+				selectHTML += '<option value="' + page.id + '" ' + selected + '>' + page.name + '</option>';
+			});
+			$pages.html( selectHTML );
+			curInst.$settingsTabPageSelectionSection.fadeIn();
+			$pages.chosen({
+				max_selected_options: 1,
+				width: '100%'
+			});
+
+			// When a profile is selected and 'Save' is clicked.
+			var $saveFacebookPageID = jQuery( '#wpstats-facebook-save-page-id' );
+			$saveFacebookPageID.off( 'click' );
+			$saveFacebookPageID.one( 'click', function( e ) {
+				e.preventDefault();
+				curInst.disableSettingsIcon();
+				var pageID = $pages.val();
+				curInst.selectedPageID = pageID;
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_facebook_save_page_id',
+							page_id: pageID
+						}, function () {
+							// Reset data - important!
+							curInst.data = null;
+							if ( 'detail' === curInst.viewName ) {
+								curInst.loadedAllData = false;
+							}
+							curInst.loadDataTabData();
+						});
+					});
+				});
+			});
+			curInst.$settingsTabDeauthorizeSection.fadeIn();
+		} else {
+			switch ( response[ 'responseContext' ] ) {
+				case 'authorization_required':
+					curInst.$settingsTabAuthorizeSection.fadeIn();
+					break;
+				case 'reauthorization_required':
+					curInst.$settingsTabReauthorizeSection.fadeIn();
+					break;
+				case 'no_pages':
+					curInst.$settingsTabNoPagesSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+				default:
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		}
+
+		curInst.viewingSettingsTab = true;
+		curInst.loadingSettingsTabData = false;
+
+		// Enable settings icon if there is data
+		if ( null != curInst.data ) {
+			curInst.enableSettingsIcon();
+		}
+
+		if ( curInst.$settingsTabAuthorizeSection.is( ':visible' ) || curInst.$settingsTabReauthorizeSection.is( ':visible' ) ) {
+			var $authorizeReauthorize = jQuery( '#wpstats-facebook-authorize, #wpstats-facebook-reauthorize' );
+			$authorizeReauthorize.off( 'click' );
+			$authorizeReauthorize.on( 'click', function( event ) {
+				event.preventDefault();
+				if ( null != curInst.authPopupWindowIntervalId ) {
+					clearInterval( curInst.authPopupWindowIntervalId );
+				}
+				curInst.createPopupWindow( curInst.authPopupWindowURL, 'FacebookAuthPopup', 900, 500, null );
+				curInst.authPopupWindowIntervalId = setInterval( function() {
+					try {
+						if ( null == curInst.popupWindow || curInst.popupWindow.closed ) {
+							clearInterval( curInst.authPopupWindowIntervalId );
+						}
+						if ( curInst.popupWindow.location.hasOwnProperty( 'href' ) &&
+							( curInst.authPopupWindowCompleteURL === curInst.popupWindow.location.href
+							|| curInst.authPopupWindowCompleteURL + '#' === curInst.popupWindow.location.href
+							|| curInst.authPopupWindowCompleteURL + '#_=_' === curInst.popupWindow.location.href ) ) {
+							curInst.popupWindow.close();
+							clearInterval( curInst.authPopupWindowIntervalId );
+							curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+								curInst.loadSettingsTabData( 'fresh' );
+							});
+						}
+					} catch (e) {
+					}
+				}, 100 );
+			});
+		}
+
+		if ( curInst.$settingsTabDeauthorizeSection.is( ':visible' ) ) {
+			var $deauthorize = jQuery( '#wpstats-facebook-deauthorize' );
+			$deauthorize.off( 'click' );
+			$deauthorize.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.post( ajaxurl, {
+							action: 'wpstats_ajax_facebook_deauthorize'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						} );
+					} );
+				});
+			});
+		}
+	});
+};
+
+/**
+ * Enable the grid tooltip and data point show/hide toggle ability.
+ */
+Facebook.prototype.enableGridIcon = function() {
+	Integration.prototype.enableGridIcon.call( this );
+};
+
+/**
+ * Disable the grid tooltip and data point show/hide toggle ability.
+ */
+Facebook.prototype.disableGridIcon = function() {
+	Integration.prototype.disableGridIcon.call( this );
+};
+
+/**
+ * Enable the settings icon tooltip and tab switchability.
+ */
+Facebook.prototype.enableSettingsIcon = function() {
+	Integration.prototype.enableSettingsIcon.call( this );
+};
+
+/**
+ * Disable the settings icon tooltip and tab switchability.
+ */
+Facebook.prototype.disableSettingsIcon = function() {
+	Integration.prototype.disableSettingsIcon.call( this );
+};
+
+Facebook.prototype.updateDataTabData = function( checkedDates ) {
+	Integration.prototype.updateDataTabData.call( this, checkedDates );
+};
+Facebook.prototype.resizeChart = function() {
+	if ( null != this.data ) {
+		setGlobalPossibleMarkers(null);
+		this.chartInstance.shutdown();
+		this.chartData[0].data = getChartData(this.data[ 'chart_data' ][ 'likes' ], this.$chart, this, 'daily');
+		this.chartData[1].data = getChartData(this.data[ 'chart_data' ][ 'reach' ], this.$chart, this, 'daily');
+		this.chartInstance = this.$chart.plot(this.chartData, this.chartOptions).data('plot');
+	}
+};
+
+function Twitter( viewName ) {
+
+	Integration.call( this, viewName );
+
+	this.integrationName = 'Twitter';
+	this.integrationId = 'twitter';
+
+	this.$loadingContainer = jQuery( '#wpstats-twitter-loading-container' );
+
+	this.translations = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'trans' ]:
+		wpstats_twitter[ 'trans' ];
+
+	/* Data */
+	this.data = null; // Contains data for the chart and data points.
+	this.loadingDataTabData = false;
+	this.viewingDataTab = false;
+	this.loadedAllData = false; // Detail page specific. Whether all data was successfully loaded or at least attempted.
+	this.$dataTableColumnsContent = jQuery( '.wpstats-data-table-column-content'  );
+
+	/* Data Points */
+	this.$dataTabContent = jQuery( '#wpstats-twitter-data-tab-content' );
+	this.$dataPointsContainer = jQuery( '#wpstats-twitter-data-points-container' );
+
+	/* Chart */
+	this.chartInstance = null;
+	this.chartID = 'wpstats-twitter-chart';
+	this.$chart = jQuery( '#' + this.chartID );
+	this.$chartContainer = jQuery( '#wpstats-twitter-chart-container' );
+	this.chartData = [
+		{
+			color: '#66ccff',
+			data: [],
+			label: ''
+		},
+		{
+			color: '#35d1ae',
+			data: [],
+			label: ''
+		}
+	];
+
+	/* Grid */
+	this.gridIconSelector = '#wpstats-twitter-grid-icon';
+	this.$gridIcon = jQuery( this.gridIconSelector );
+	this.gridIconContentSelector = '#wpstats-twitter-grid-icon-content';
+	this.gridIconChildrenContent = jQuery( '#wpstats-twitter-grid-icon-content' ).html();
+	this.gridDisplayed = false;
+	this.gridClickEventName = 'click.twitter_grid';
+	this.gridMouseoverEventName = 'mouseover.twitter_grid';
+	this.gridMouseleaveEventName = 'mouseleave.twitter_grid';
+	this.gridMouseoutEventName = 'mouseout.twitter_grid';
+
+	/* Settings */
+	this.loadingSettingsTabData = false;
+	this.viewingSettingsTab = false;
+	this.$settingsIcon = jQuery( '#wpstats-twitter-settings-icon');
+	this.$settingsTabSections = jQuery( '.wpstats-twitter-settings-tab-section' );
+	this.$settingsTabDeauthorizeSection = jQuery( '#wpstats-twitter-settings-deauthorize-section' );
+	this.$settingsTabAuthorizeSection = jQuery( '#wpstats-twitter-settings-authorize-section' );
+	this.$settingsTabValidAccessTokenSection = jQuery( '#wpstats-twitter-settings-valid-access-token-section' );
+	this.$settingsTabInvalidAcccessTokenSection = jQuery( '#wpstats-twitter-settings-invalid-access-token-section' );
+	this.$settingsTabRateLimitReachedSection = jQuery( '#wpstats-twitter-settings-rate-limit-reached-section' );
+	this.settingsClickEventName = 'click.twitter_settings';
+
+	this.historicalDataErrorContainer = jQuery( '#wpstats-twitter-historical-data-notice-container' );
+	this.historicalDataError = jQuery( '#wpstats-twitter-historical-data-notice' );
+
+	this.$topDataErrorContainers = jQuery( '.wpstats-top-data-error-container' );
+	this.$topTweetsDataErrorContainer = jQuery( '#wpstats-twitter-top-tweets-data-error-container' );
+	this.$topRetweetsDataErrorContainer = jQuery( '#wpstats-twitter-top-retweets-data-error-container' );
+	this.$topMentionsDataErrorContainer = jQuery( '#wpstats-twitter-top-mentions-data-error-container' );
+	this.$topFavouritesDataErrorContainer = jQuery( '#wpstats-twitter-top-favourites-data-error-container' );
+
+	this.authPopupWindowIntervalId = null;
+	// URL popup window first directs to authorize the user.
+	this.authPopupWindowURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'twitter' ][ 'auth_popup_window_url' ] :
+		wpstats_twitter[ 'auth_popup_window_url' ];
+	// URL popup window directs to when authorization is complete.
+	this.authPopupWindowCompleteURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'auth_popup_window_complete_url' ] :
+		wpstats_twitter[ 'auth_popup_window_complete_url' ];
+
+	this.currentUserCanAccessSettings = ( 'mashboard' === viewName ) ? wpstats_mashboard[ 'current_user_can_access_settings' ] : wpstats_twitter[ 'current_user_can_access_settings' ];
+	this.userCannotAccessSettingsErrorMsg = this.translations[ 'current_user_settings_access_denied_error' ];
+	this.$userCannotAccessSettingsError = "<p class='wpstats-error-message wpstats-twitter-settings-access-denied-error'>" + this.userCannotAccessSettingsErrorMsg + "<p>";
+}
+Twitter.prototype = createObject( Integration.prototype );
+Twitter.prototype.constructor = Twitter;
+
+/**
+ * Load data for the data tab.
+ */
+Twitter.prototype.loadDataTabData = function() {
+	this.hideChartFigure();
+	this.historicalDataErrorContainer.fadeOut();
+	this.$topDataErrorContainers.fadeOut();
+	this.viewingSettingsTab = false;
+	this.loadingDataTabData = true;
+	var curInst = this;
+	this.$settingsTabSections
+		.add( this.$chartContainer )
+		.add( this.$dataPointsContainer )
+		.add( this.$dataTableColumnsContent )
+		.fadeOut( 400 ).promise().done( function() {
+			curInst.$loadingContainer.fadeIn( 400, function() {
+
+				if ( 'mashboard' === curInst.viewName ) {
+					// If data exists and the settings icon was clicked, just display the data.
+					if ( null != curInst.data ) {
+						curInst.displayDataTabData();
+						return;
+					}
+					jQuery.get( ajaxurl, {
+						action: 'wpstats_ajax_twitter_api_query',
+						query: 'get_mashboard_view_data',
+						start_date: curInst.startDate,
+						end_date: curInst.endDate
+					}, function ( response ) {
+						response = jQuery.parseJSON( response );
+						if ( null != response.data ) {
+							curInst.data = response.data;
+							curInst.displayDataTabData();
+						} else {
+							curInst.loadSettingsTabData( 'fresh' );
+						}
+					} );
+				} else if ( 'detail' === curInst.viewName ) {
+					if ( true === curInst.loadedAllData ) {
+						curInst.displayDataTabData();
+					} else {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_twitter_api_query',
+							query: 'get_detail_view_data',
+							start_date: curInst.startDate,
+							end_date: curInst.endDate
+						}, function ( response ) {
+							response = jQuery.parseJSON( response );
+							if ( null != response.data ) {
+								curInst.data = response.data;
+								curInst.displayDataTabData();
+							} else {
+								curInst.loadSettingsTabData( 'fresh' );
+							}
+						} );
+					}
+				}
+			});
+		});
+};
+
+/**
+ * Display the data for the data tab.
+ */
+Twitter.prototype.displayDataTabData = function() {
+	var curInst = this;
+	this.historicalDataErrorContainer.fadeOut();
+	this.$topDataErrorContainers.fadeOut();
+	this.$loadingContainer.fadeOut( 400, function() {
+
+		if ( typeof curInst.data[ 'period' ][ 'oldest_tweet_date' ] === 'string' ) {
+			var startDate = new Date( curInst.startDate ),
+				endDate = new Date( curInst.endDate ),
+				oldestTweetDate = new Date( curInst.data[ 'period' ][ 'oldest_tweet_date' ] ),
+				oldestTweetDateTime = oldestTweetDate.getTime();
+
+			if ( startDate.getTime() <= oldestTweetDateTime || endDate.getTime() <= oldestTweetDateTime ) {
+				var historicalDataErrorMsg = curInst.translations[ 'twitter_historical_data_error' ];
+				historicalDataErrorMsg = historicalDataErrorMsg.replace( '{DATE}', curInst.data[ 'period' ][ 'oldest_tweet_date' ] );
+				var $a = curInst.historicalDataError.find( 'a' );
+				$a.attr( 'data-tooltip', historicalDataErrorMsg );
+				$a.tooltip({
+					content: $a.attr( 'data-tooltip' ),
+					items  : '[data-tooltip]'
+				});
+				curInst.historicalDataErrorContainer.fadeIn();
+			}
+		}
+
+		curInst.showChartFigure();
+		curInst.$dataTabContent.fadeIn();
+		curInst.$chartContainer.show();
+
+		// Do we need to destroy the chart?
+		if ( null !== curInst.chartInstance ) {
+			curInst.chartInstance.shutdown();
+		}
+		// Create chart
+		curInst.chartData[ 0 ].data = getChartData( curInst.data[ 'chart_data' ][ 'favourites' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[ 1 ].data = getChartData( curInst.data[ 'chart_data' ][ 'mentions' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartInstance = curInst.$chart.plot( curInst.chartData, curInst.chartOptions ).data( 'plot' );
+		curInst.$dataPointsContainer.show();
+
+		/*
+		 * Period data
+		 */
+
+		// Tweets
+		jQuery( '#wpstats-twitter-tweets' ).html( curInst.data[ 'period' ][ 'tweets' ] );
+		jQuery( '#wpstats-twitter-tweets-change' ).html( curInst.data[ 'period' ][ 'tweets_change' ] );
+		var $tweetsChangeInfo = jQuery( '#wpstats-twitter-tweets-change-info' );
+		curInst.changeTooltipContent( $tweetsChangeInfo, curInst.data[ 'period' ][ 'previous_tweets' ] + ' ' + $tweetsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-tweets-change-direction', curInst.data[ 'period' ][ 'tweets_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-tweets-change', curInst.data[ 'period' ][ 'tweets_change_direction' ], false );
+
+		// Following
+		jQuery( '#wpstats-twitter-following' ).html( curInst.data[ 'period' ][ 'following' ] );
+		jQuery( '#wpstats-twitter-following-change' ).html( curInst.data[ 'period' ][ 'following_change' ] );
+		var $followingChangeInfo = jQuery( '#wpstats-twitter-following-change-info' );
+		curInst.changeTooltipContent( $followingChangeInfo, curInst.data[ 'period' ][ 'previous_following' ] + ' ' + $followingChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-following-change-direction', curInst.data[ 'period' ][ 'following_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-following-change', curInst.data[ 'period' ][ 'following_change_direction' ], false );
+
+		// Followers
+		jQuery( '#wpstats-twitter-followers' ).html( curInst.data[ 'period' ][ 'followers' ] );
+		jQuery( '#wpstats-twitter-followers-change' ).html( curInst.data[ 'period' ][ 'followers_change' ] );
+		var $followersChangeInfo = jQuery( '#wpstats-twitter-followers-change-info' );
+		curInst.changeTooltipContent( $followersChangeInfo, curInst.data[ 'period' ][ 'previous_followers' ] + ' ' + $followersChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-followers-change-direction', curInst.data[ 'period' ][ 'followers_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-followers-change', curInst.data[ 'period' ][ 'followers_change_direction' ], false );
+
+		// Retweets
+		jQuery( '#wpstats-twitter-retweets' ).html( curInst.data[ 'period' ][ 'retweets' ] );
+		jQuery( '#wpstats-twitter-retweets-change' ).html( curInst.data[ 'period' ][ 'retweets_change' ] );
+		var $retweetsChangeInfo = jQuery( '#wpstats-twitter-retweets-change-info' );
+		curInst.changeTooltipContent( $retweetsChangeInfo, curInst.data[ 'period' ][ 'previous_retweets' ] + ' ' + $retweetsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-retweets-change-direction', curInst.data[ 'period' ][ 'retweets_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-retweets-change', curInst.data[ 'period' ][ 'retweets_change_direction' ], false );
+
+		// Favourites
+		jQuery( '#wpstats-twitter-favourites' ).html( curInst.data[ 'period' ][ 'favourites' ] );
+		jQuery( '#wpstats-twitter-favourites-change' ).html( curInst.data[ 'period' ][ 'favourites_change' ] );
+		var $favouritesChangeInfo = jQuery( '#wpstats-twitter-favourites-change-info' );
+		curInst.changeTooltipContent( $favouritesChangeInfo, curInst.data[ 'period' ][ 'previous_favourites' ] + ' ' + $favouritesChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-favourites-change-direction', curInst.data[ 'period' ][ 'favourites_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-favourites-change', curInst.data[ 'period' ][ 'favourites_change_direction' ], false );
+
+		// Mentions
+		jQuery( '#wpstats-twitter-mentions' ).html( curInst.data[ 'period' ][ 'mentions' ] );
+		jQuery( '#wpstats-twitter-mentions-change' ).html( curInst.data[ 'period' ][ 'mentions_change' ] );
+		var $mentionsChangeInfo = jQuery( '#wpstats-twitter-mentions-change-info' );
+		curInst.changeTooltipContent( $mentionsChangeInfo, curInst.data[ 'period' ][ 'previous_mentions' ] + ' ' + $mentionsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-twitter-mentions-change-direction', curInst.data[ 'period' ][ 'mentions_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-twitter-mentions-change', curInst.data[ 'period' ][ 'mentions_change_direction' ], false );
+
+		if ( 'detail' === curInst.viewName ) {
+
+			var $currentTweets = jQuery( '#wpstats-twitter-current-tweets' );
+			$currentTweets.html( curInst.data[ 'current' ][ 'tweets' ] );
+
+			var $currentRetweets = jQuery( '#wpstats-twitter-current-retweets' );
+			$currentRetweets.html( curInst.data[ 'current' ][ 'retweets' ] );
+
+			var $currentFollowing = jQuery( '#wpstats-twitter-current-following' );
+			$currentFollowing.html( curInst.data[ 'current' ][ 'following' ] );
+
+			var $currentFollowers = jQuery( '#wpstats-twitter-current-followers' );
+			$currentFollowers.html( curInst.data[ 'current' ][ 'followers' ] );
+
+			var $currentMentions = jQuery( '#wpstats-twitter-current-mentions' );
+			$currentMentions.html( curInst.data[ 'current' ][ 'mentions' ] );
+
+			// Top Latest Tweets
+			(function () {
+				var $table = jQuery( '#wpstats-twitter-top-latest-tweets' ),
+					$column = $table.parent(),
+					$tbody = $table.find( 'tbody' ),
+					topLatestTweets = curInst.data[ 'period' ][ 'top_tweets' ],
+					rows = '';
+
+				if ( ! topLatestTweets.length ) {
+					$table.hide();
+					curInst.$topTweetsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( topLatestTweets, function ( i, v ) {
+						rows += '<tr>' +
+						'<td><p>' + v[ 'text' ] + '</p><p>' + parseTopTableDate( v[ 'date' ] ) + '</p></td>' +
+						'<td>' + v[ 'retweets' ] + '</td>' +
+						'<td>' + v[ 'favourites' ] + '</td>' +
+						'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$column.show();
+			})();
+
+			// Top Latest Retweets
+			(function() {
+				var $table = jQuery( '#wpstats-twitter-top-latest-retweets' ),
+					$column = $table.parent(),
+					$tbody = $table.find( 'tbody' ),
+					topLatestRetweets = curInst.data[ 'period' ][ 'top_retweets' ],
+					rows = '';
+
+				if ( ! topLatestRetweets.length ) {
+					$table.hide();
+					curInst.$topRetweetsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( topLatestRetweets, function ( i, v ) {
+						rows += '<tr>' +
+						'<td><p>' + v[ 'text' ] + '</p><p>' + parseTopTableDate( v[ 'date' ] ) + '</p></td>' +
+						'<td>' + v[ 'retweets' ] + '</td>' +
+						'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$column.show();
+			})();
+
+			// Top Latest Mentions
+			(function() {
+				var $table = jQuery( '#wpstats-twitter-top-latest-mentions' ),
+					$column = $table.parent(),
+					$tbody = $table.find( 'tbody' ),
+					topLatestMentions = curInst.data[ 'period' ][ 'top_mentions' ],
+					rows = '';
+
+				if ( ! topLatestMentions.length ) {
+					$table.hide();
+					curInst.$topMentionsDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( topLatestMentions, function ( i, v ) {
+						rows += '<tr>' +
+						'<td>' + v[ 'user_screen_name' ] + '</td>' +
+						'<td><p>' + v[ 'text' ] + '</p><p>' + parseTopTableDate( v[ 'date' ] ) + '</p></td>' +
+						'<td>' + v[ 'retweets' ] + '</td>' +
+						'<td>' + v[ 'favourites' ] + '</td>' +
+						'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$column.show();
+			})();
+
+			// Top Latest Favourites
+			(function() {
+				var $table = jQuery( '#wpstats-twitter-top-latest-favourites' ),
+					$column = $table.parent(),
+					$tbody = $table.find( 'tbody' ),
+					topLatestFavourites = curInst.data[ 'period' ][ 'top_favourites' ],
+					rows = '';
+
+				if ( ! topLatestFavourites.length ) {
+					$table.hide();
+					curInst.$topFavouritesDataErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( topLatestFavourites, function ( i, v ) {
+						rows += '<tr>' +
+						'<td><p>' + v[ 'text' ] + '</p><p>' + parseTopTableDate( v[ 'date' ] ) + '</p></td>' +
+						'<td>' + v[ 'favourites' ] + '</td>' +
+						'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$column.show();
+			})();
+		}
+
+		curInst.enableGridIcon();
+		curInst.enableSettingsIcon();
+
+		curInst.loadingDataTabData = false;
+		curInst.viewingDataTab = true;
+	});
+};
+
+/**
+ * Load settings tab data.
+ *
+ * @param {string} requestType Whether to request fresh or cached results. Important when there is an error, and we must request fresh results.
+ */
+Twitter.prototype.loadSettingsTabData = function( requestType ) {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();
+		return;
+	}
+
+	this.hideChartFigure();
+	var curInst = this,
+		$fadeOutObjects = ( 'mashboard' === this.viewName ) ?
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.historicalDataErrorContainer ).add( this.$topDataErrorContainers ) :
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.$dataTableColumnsContent ).add( this.historicalDataErrorContainer ).add( this.$topDataErrorContainers );
+
+	$fadeOutObjects.fadeOut( 400 ).promise().done( function () {
+		curInst.$loadingContainer.fadeIn( 400, function () {
+			jQuery.get( ajaxurl, {
+				action: 'wpstats_ajax_twitter_api_query',
+				query: 'get_status',
+				request_type: requestType
+			}, function ( response ) {
+				response = jQuery.parseJSON( response );
+				curInst.displaySettingsTabData( response );
+			});
+		});
+	});
+};
+
+/**
+ * Display settings tab data.
+ *
+ * @param {Object} response Settings tab response data.
+ */
+Twitter.prototype.displaySettingsTabData = function( response ) {
+	var curInst = this;
+
+	curInst.$loadingContainer.fadeOut( 400, function () {
+
+		if ( 'success' === response[ 'responseType' ] ) {
+			switch ( response[ 'responseContext' ] ) {
+				case 'valid_access_token':
+					curInst.$settingsTabValidAccessTokenSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		} else {
+			switch ( response[ 'responseContext' ] ) {
+				case 'authorization_required':
+					curInst.$settingsTabAuthorizeSection.fadeIn();
+					break;
+				case 'invalid_access_token':
+					curInst.$settingsTabInvalidAcccessTokenSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+				case 'rate_limit_reached':
+					curInst.$settingsTabRateLimitReachedSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+				default:
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		}
+
+		curInst.viewingSettingsTab = true;
+		curInst.loadingSettingsTabData = false;
+
+		// Enable settings icon if there is data
+		if ( null != curInst.data ) {
+			curInst.enableSettingsIcon();
+		}
+
+		if ( curInst.$settingsTabAuthorizeSection.is( ':visible' ) ) {
+			var $authorize = jQuery( '#wpstats-twitter-authorize' );
+			$authorize.off( 'click' );
+			$authorize.on( 'click', function( event ) {
+				event.preventDefault();
+				if ( null != curInst.authPopupWindowIntervalId ) {
+					clearInterval( curInst.authPopupWindowIntervalId );
+				}
+				curInst.createPopupWindow( curInst.authPopupWindowURL, 'TwitterAuthPopup', 900, 500, null );
+				curInst.authPopupWindowIntervalId = setInterval( function() {
+					try {
+						if ( null == curInst.popupWindow || curInst.popupWindow.closed ) {
+							clearInterval( curInst.authPopupWindowIntervalId );
+						}
+						if ( curInst.popupWindow.location.hasOwnProperty( 'href' ) && ( curInst.authPopupWindowCompleteURL === curInst.popupWindow.location.href || curInst.authPopupWindowCompleteURL + '#' === curInst.popupWindow.location.href ) ) {
+							curInst.popupWindow.close();
+							clearInterval( curInst.authPopupWindowIntervalId );
+							curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+								curInst.loadDataTabData();
+							});
+						}
+					} catch (e) {
+					}
+				}, 100 );
+			});
+		}
+
+		if ( curInst.$settingsTabDeauthorizeSection.is( ':visible' ) ) {
+			var $deauthorize = jQuery( '#wpstats-twitter-deauthorize' );
+			$deauthorize.off( 'click' );
+			$deauthorize.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_twitter_api_query',
+							query: 'deauthorize'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						} );
+					} );
+				});
+			});
+		}
+	});
+};
+
+Twitter.prototype.resizeChart = function() {
+	if ( null != this.data ) {
+		setGlobalPossibleMarkers( null );
+		this.chartInstance.shutdown();
+		this.chartData[ 0 ].data = getChartData( this.data[ 'chart_data' ][ 'favourites' ], this.$chart, this, 'daily' );
+		this.chartData[ 1 ].data = getChartData( this.data[ 'chart_data' ][ 'mentions' ], this.$chart, this, 'daily' );
+		this.chartInstance = this.$chart.plot( this.chartData, this.chartOptions ).data( 'plot' );
+	}
+};
+
+/*
+ * Google Adwords
+ */
+function GoogleAdwords( viewName ) {
+
+	Integration.call( this, viewName );
+
+	this.integrationName = 'GoogleAdwords';
+	this.integrationId = 'google-adwords';
+
+	// (As of 0.4.2) Whether Google Adwords Setup button click has been registered
+	this.setup = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_adwords' ][ 'setup' ] : wpstats_google_adwords[ 'setup' ];
+
+	this.$loadingContainer = jQuery( '#wpstats-google-adwords-loading-container' );
+
+	this.translations = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'trans' ]:
+		wpstats_google_adwords[ 'trans' ];
+
+	this.selectedCustomerId = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_adwords' ][ 'selected_customer_id' ] :
+		wpstats_google_adwords[ 'selected_customer_id' ];
+
+	this.selectedCampaignId = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_adwords' ][ 'selected_campaign_id' ] :
+		wpstats_google_adwords[ 'selected_campaign_id' ];
+
+	this.$integrationErrorContainer = jQuery( '#wpstats-google-adwords-error-container' );
+
+	this.currencySymbol = null;
+
+	/* Data */
+	this.data = null; // Contains data for the chart and data points.
+	this.loadingDataTabData = false;
+	this.viewingDataTab = false;
+	this.loadedAllData = false; // Detail page specific. Whether all data was successfully loaded or at least attempted.
+	this.$dataTableColumnsContent = jQuery( '.wpstats-data-table-column-content'  );
+
+	/* Data Points */
+	this.$dataTabContent = jQuery( '#wpstats-google-adwords-data-tab-content' );
+	this.$dataPointsContainer = jQuery( '#wpstats-google-adwords-data-points-container' );
+
+	/* Chart */
+	this.chartInstance = null;
+	this.chartID = 'wpstats-google-adwords-chart';
+	this.$chart = jQuery( '#' + this.chartID );
+	this.$chartContainer = jQuery( '#wpstats-google-adwords-chart-container' );
+	this.chartData = [
+		{
+			color: '#4285F4',
+			data: [],
+			label: 'Cost'
+		},
+		{
+			color: '#0F9D58',
+			data: [],
+			label: 'Avg. CPC'
+		}
+	];
+
+	/* Grid */
+	this.gridIconSelector = '#wpstats-google-adwords-grid-icon';
+	this.$gridIcon = jQuery( this.gridIconSelector );
+	this.gridIconContentSelector = '#wpstats-google-adwords-grid-icon-content';
+	this.gridIconChildrenContent = jQuery( '#wpstats-google-adwords-grid-icon-content' ).html();
+	this.gridDisplayed = false;
+	this.gridClickEventName = 'click.google_adwords_grid';
+	this.gridMouseoverEventName = 'mouseover.google_adwords_grid';
+	this.gridMouseleaveEventName = 'mouseleave.google_adwords_grid';
+	this.gridMouseoutEventName = 'mouseout.google_adwords_grid';
+
+	/* Settings */
+	this.loadingSettingsTabData = false;
+	this.viewingSettingsTab = false;
+	this.$settingsIcon = jQuery( '#wpstats-google-adwords-settings-icon');
+	this.$settingsTabSections = jQuery( '.wpstats-google-adwords-settings-tab-section' );
+	this.$settingsTabDeauthorizeSection = jQuery( '#wpstats-google-adwords-settings-deauthorize-section' );
+	this.$settingsTabAuthorizeSection = jQuery( '#wpstats-google-adwords-settings-authorize-section' );
+	this.$settingsTabCampaignSelectionSection = jQuery( '#wpstats-google-adwords-campaign-selection-section' );
+	this.$settingsTabAccountSelectionSection = jQuery( '#wpstats-google-adwords-account-selection-section' );
+	this.$settingsTabAddAccountsSection = jQuery( '#wpstats-google-adwords-add-accounts-section' );
+
+	this.settingsClickEventName = 'click.google_adwords_settings';
+
+	if ( 'detail' === this.viewName ) {
+		this.$accountLevelCampaignsTableErrorContainer = jQuery( '#wpstats-google-adwords-account-level-campaigns-table' );
+		this.$accountLevelTopKeywordPerformanceTableErrorContainer = jQuery( '#wpstats-google-adwords-account-level-top-keyword-performance' );
+		this.$campaignLevelAdGroupsTableErrorContainer = jQuery( '#wpstats-google-adwords-campaign-level-ad-groups-table' );
+		this.$campaignLevelTopKeywordPerformanceTableErrorContainer = jQuery( '#wpstats-google-adwords-campaign-level-top-keywords-performance' );
+
+		this.$dataTableColumns = jQuery( '.wpstats-service-detail-data-table-column' );
+	}
+
+	this.$campaignSectionDescription = jQuery( '#wpstats-google-adwords-select-campaign-description' );
+
+	this.$campaignSectionLoadingIcon = this.$loadingContainer.clone();
+	this.$campaignSectionLoadingIcon.attr( 'id', 'wpstats-google-adwords-campaign-selection-loading-icon' );
+	this.$campaignSectionLoadingIcon.insertBefore( this.$settingsTabCampaignSelectionSection );
+	this.$campaignSectionLoadingIcon.hide();
+
+	this.authPopupWindowIntervalId = null;
+	// URL popup window first directs to authorize the user.
+	this.authPopupWindowURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'google_adwords' ][ 'auth_popup_window_url' ] :
+		wpstats_google_adwords[ 'auth_popup_window_url' ];
+	// URL popup window directs to when authorization is complete.
+	this.authPopupWindowCompleteURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'auth_popup_window_complete_url' ] :
+		wpstats_google_adwords[ 'auth_popup_window_complete_url' ];
+
+	this.currentUserCanAccessSettings = ( 'mashboard' === viewName ) ? wpstats_mashboard[ 'current_user_can_access_settings' ] : wpstats_google_adwords[ 'current_user_can_access_settings' ];
+	this.userCannotAccessSettingsErrorMsg = this.translations[ 'current_user_settings_access_denied_error' ];
+	this.$userCannotAccessSettingsError = "<p class='wpstats-error-message wpstats-google-adwords-settings-access-denied-error'>" + this.userCannotAccessSettingsErrorMsg + "<p>";
+
+	var curInst = this;
+
+	$('#wpstats-google-adwords-authorize').click(function(e) {
+		e.preventDefault();
+		console.log("Google Adwords Setup Button Clicked");
+		jQuery.get( ajaxurl, {
+			action: 'wpstats_ajax_google_adwords_api_query',
+			query: 'authorize'
+		}, function () {
+			curInst.setup = true;
+			curInst.loadDataTabData();
+		});
+	});
+}
+GoogleAdwords.prototype = createObject( Integration.prototype );
+GoogleAdwords.prototype.constructor = GoogleAdwords;
+
+/**
+ * Load data for the data tab.
+ */
+GoogleAdwords.prototype.loadDataTabData = function() {
+
+	var curInst = this;
+
+	if ( ! this.setup ) {
+		this.$settingsTabSections.fadeOut();
+		this.$loadingContainer.fadeOut(400, function() {
+			curInst.$settingsTabAuthorizeSection.fadeIn();
+		});
+		return;
+	}
+
+	this.hideChartFigure();
+	this.$integrationErrorContainer.fadeOut();
+	this.viewingSettingsTab = false;
+	this.loadingDataTabData = true;
+	this.$settingsTabSections
+		.add( this.$chartContainer )
+		.add( this.$dataPointsContainer )
+		.add( this.$dataTableColumnsContent )
+		.fadeOut( 400 ).promise().done( function() {
+			curInst.$loadingContainer.fadeIn( 400, function() {
+				if ( 'mashboard' === curInst.viewName ) {
+					// If data exists and the settings icon was clicked, just display the data.
+					if ( null != curInst.data ) {
+						curInst.displayDataTabData();
+						return;
+					}
+					jQuery.get( ajaxurl, {
+						action: 'wpstats_ajax_google_adwords_api_query',
+						query: 'get_mashboard_view_data',
+						start_date: curInst.startDate,
+						end_date: curInst.endDate,
+						customer_id: curInst.selectedCustomerId,
+						campaign_id: curInst.selectedCampaignId
+					}, function ( response ) {
+						response = jQuery.parseJSON( response );
+						if ( null != response.data ) {
+							curInst.data = response.data;
+							curInst.displayDataTabData();
+						} else {
+							curInst.loadSettingsTabData( 'fresh' );
+						}
+					} );
+				} else if ( 'detail' === curInst.viewName ) {
+					if ( true === curInst.loadedAllData ) {
+						curInst.displayDataTabData();
+					} else {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_google_adwords_api_query',
+							query: 'get_detail_view_data',
+							start_date: curInst.startDate,
+							end_date: curInst.endDate,
+							customer_id: curInst.selectedCustomerId,
+							campaign_id: curInst.selectedCampaignId
+						}, function ( response ) {
+							response = jQuery.parseJSON( response );
+							if ( null != response.data ) {
+								curInst.data = response.data;
+								curInst.displayDataTabData();
+							} else {
+								curInst.loadSettingsTabData( 'fresh' );
+							}
+						} );
+					}
+				}
+			});
+		});
+};
+
+/**
+ * Enable the grid tooltip and data point show/hide toggle ability.
+ */
+GoogleAdwords.prototype.enableGridIcon = function() {
+	Integration.prototype.enableGridIcon.call( this );
+};
+
+/**
+ * Disable the grid tooltip and data point show/hide toggle ability.
+ */
+GoogleAdwords.prototype.disableGridIcon = function() {
+	Integration.prototype.disableGridIcon.call( this );
+};
+
+/**
+ * Enable the settings icon tooltip and tab switchability.
+ */
+GoogleAdwords.prototype.enableSettingsIcon = function() {
+	Integration.prototype.enableSettingsIcon.call( this );
+};
+
+/**
+ * Disable the settings icon tooltip and tab switchability.
+ */
+GoogleAdwords.prototype.disableSettingsIcon = function() {
+	Integration.prototype.disableSettingsIcon.call( this );
+};
+
+/**
+ * Display the data for the data tab.
+ */
+GoogleAdwords.prototype.displayDataTabData = function() {
+	var curInst = this;
+	this.$integrationErrorContainer.fadeOut();
+	this.$loadingContainer.fadeOut( 400, function() {
+
+		curInst.showChartFigure();
+		curInst.$dataTabContent.fadeIn();
+		curInst.$chartContainer.show();
+
+		var currencySymbol = curInst.data[ 'currency_symbol_hex_code' ];
+
+		curInst.currencySymbol = currencySymbol;
+
+		// Do we need to destroy the chart?
+		if ( null !== curInst.chartInstance ) {
+			curInst.chartInstance.shutdown();
+		}
+		// Create chart
+		curInst.chartData[0].data = getChartData( curInst.data[ 'chart_data' ][ 'clicks' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[1].data = getChartData( curInst.data[ 'chart_data' ][ 'avg_cost_per_click' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[1].yaxis = 2;
+		curInst.chartOptions.yaxes[1].tickFormatter = function( v, axis ) {
+			return currencySymbol + parseFloat(v).toFixed( 1 );
+		};
+		curInst.chartOptions.tooltipOpts.content = function( label, x, y, item ) {
+			if ( 'GoogleAdwords' === curInst.integrationName && 'Avg. CPC' === label && item.seriesIndex === 1 ) {
+				return '<strong>' + curInst.currencySymbol.toString() + y.toString() + '</strong><br>' + x;
+			}
+			return '<strong>' + y.toString() + '</strong><br>' + x;
+		};
+		curInst.chartInstance = curInst.$chart.plot( curInst.chartData, curInst.chartOptions ).data( 'plot' );
+		curInst.$dataPointsContainer.show();
+
+		// Cost
+		jQuery( '#wpstats-google-adwords-cost' ).html( curInst.data[ 'period' ][ 'cost' ] );
+		jQuery( '#wpstats-google-adwords-cost-currency').html( currencySymbol );
+		jQuery( '#wpstats-google-adwords-cost-change' ).html( curInst.data[ 'period' ][ 'cost_change' ] );
+		var $costChangeInfo = jQuery( '#wpstats-google-adwords-cost-change-info' );
+		curInst.changeTooltipContent( $costChangeInfo, currencySymbol + curInst.data[ 'period' ][ 'previous_cost' ] + ' ' + $costChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-google-adwords-cost-change-direction', curInst.data[ 'period' ][ 'cost_change_direction' ], true );
+		setDataPointChangeClass( 'wpstats-google-adwords-cost-change', curInst.data[ 'period' ][ 'cost_change_direction' ], true );
+
+		// Clicks
+		jQuery( '#wpstats-google-adwords-clicks' ).html( curInst.data[ 'period' ][ 'clicks' ] );
+		jQuery( '#wpstats-google-adwords-clicks-change' ).html( curInst.data[ 'period' ][ 'clicks_change' ] );
+		var $clicksChangeInfo = jQuery( '#wpstats-google-adwords-clicks-change-info' );
+		curInst.changeTooltipContent( $clicksChangeInfo, curInst.data[ 'period' ][ 'previous_clicks' ] + ' ' + $clicksChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-google-adwords-clicks-change-direction', curInst.data[ 'period' ][ 'clicks_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-google-adwords-clicks-change', curInst.data[ 'period' ][ 'clicks_change_direction' ], false );
+
+		// Avg Cost Per Click
+		jQuery( '#wpstats-google-adwords-avg-cost-per-click' ).html( curInst.data[ 'period' ][ 'avg_cost_per_click' ] );
+		jQuery( '#wpstats-google-adwords-avg-cost-per-click-currency').html( currencySymbol );
+		jQuery( '#wpstats-google-adwords-avg-cost-per-click-change' ).html( curInst.data[ 'period' ][ 'avg_cost_per_click_change' ] );
+		var $averageCostPerClickChangeInfo = jQuery( '#wpstats-google-adwords-avg-cost-per-click-change-info' );
+		curInst.changeTooltipContent( $averageCostPerClickChangeInfo, currencySymbol + curInst.data[ 'period' ][ 'previous_avg_cost_per_click' ] + ' ' + $averageCostPerClickChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-google-adwords-avg-cost-per-click-change-direction', curInst.data[ 'period' ][ 'avg_cost_per_click_change_direction' ], true );
+		setDataPointChangeClass( 'wpstats-google-adwords-avg-cost-per-click-change', curInst.data[ 'period' ][ 'avg_cost_per_click_change_direction' ], true );
+
+		// Conversions
+		jQuery( '#wpstats-google-adwords-conversions' ).html( curInst.data[ 'period' ][ 'conversions' ] );
+		jQuery( '#wpstats-google-adwords-conversions-change' ).html( curInst.data[ 'period' ][ 'conversions_change' ] );
+		var $conversionsChangeInfo = jQuery( '#wpstats-google-adwords-conversions-change-info' );
+		curInst.changeTooltipContent( $conversionsChangeInfo, curInst.data[ 'period' ][ 'previous_conversions' ] + ' ' + $conversionsChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-google-adwords-conversions-change-direction', curInst.data[ 'period' ][ 'conversions_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-google-adwords-conversions-change', curInst.data[ 'period' ][ 'conversions_change_direction' ], false );
+
+		if ( 'detail' === curInst.viewName ) {
+			// Impressions
+			jQuery( '#wpstats-google-adwords-impressions' ).html( curInst.data[ 'period' ][ 'impressions' ] );
+			jQuery( '#wpstats-google-adwords-impressions-change' ).html( curInst.data[ 'period' ][ 'impressions_change' ] );
+			var $impressionsChangeInfo = jQuery( '#wpstats-google-adwords-impressions-change-info' );
+			curInst.changeTooltipContent( $impressionsChangeInfo, curInst.data[ 'period' ][ 'previous_impressions' ] + ' ' + $impressionsChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-adwords-impressions-change-direction', curInst.data[ 'period' ][ 'impressions_change_direction' ], false );
+			setDataPointChangeClass( 'wpstats-google-adwords-impressions-change', curInst.data[ 'period' ][ 'impressions_change_direction' ], false );
+
+			// Click Through Rate
+			jQuery( '#wpstats-google-adwords-click-through-rate' ).html( curInst.data[ 'period' ][ 'click_through_rate' ] );
+			jQuery( '#wpstats-google-adwords-click-through-rate-change' ).html( curInst.data[ 'period' ][ 'click_through_rate_change' ] );
+			var $clickThroughRateChangeInfo = jQuery( '#wpstats-google-adwords-click-through-rate-change-info' );
+			curInst.changeTooltipContent( $clickThroughRateChangeInfo, curInst.data[ 'period' ][ 'previous_click_through_rate' ] + '% ' + $clickThroughRateChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-adwords-click-through-rate-change-direction', curInst.data[ 'period' ][ 'click_through_rate_change_direction' ], false );
+			setDataPointChangeClass( 'wpstats-google-adwords-click-through-rate-change', curInst.data[ 'period' ][ 'click_through_rate_change_direction' ], false );
+
+			// Average Cost Per Conversion
+			jQuery( '#wpstats-google-adwords-avg-cost-per-conversion' ).html( curInst.data[ 'period' ][ 'avg_cost_per_conversion' ] );
+			jQuery( '#wpstats-google-adwords-avg-cost-per-conversion-currency').html( currencySymbol );
+			jQuery( '#wpstats-google-adwords-avg-cost-per-conversion-change' ).html( curInst.data[ 'period' ][ 'avg_cost_per_conversion_change' ] );
+			var $avgCostPerConversionChangeInfo = jQuery( '#wpstats-google-adwords-avg-cost-per-conversion-change-info' );
+			curInst.changeTooltipContent( $avgCostPerConversionChangeInfo, currencySymbol + curInst.data[ 'period' ][ 'previous_average_cost_per_conversion' ] + ' ' + $avgCostPerConversionChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-adwords-avg-cost-per-conversion-change-direction', curInst.data[ 'period' ][ 'avg_cost_per_conversion_change_direction' ], true );
+			setDataPointChangeClass( 'wpstats-google-adwords-avg-cost-per-conversion-change', curInst.data[ 'period' ][ 'avg_cost_per_conversion_change_direction' ], true );
+
+			// Bounce Rate
+			jQuery( '#wpstats-google-adwords-bounce-rate' ).html( curInst.data[ 'period' ][ 'bounce_rate' ] );
+			jQuery( '#wpstats-google-adwords-bounce-rate-change' ).html( curInst.data[ 'period' ][ 'bounce_rate_change' ] );
+			var $bounceRateChangeInfo = jQuery( '#wpstats-google-adwords-bounce-rate-change-info' );
+			curInst.changeTooltipContent( $bounceRateChangeInfo, curInst.data[ 'period' ][ 'previous_bounce_rate' ] + '% ' + $bounceRateChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-google-adwords-bounce-rate-change-direction', curInst.data[ 'period' ][ 'bounce_rate_change_direction' ], true );
+			setDataPointChangeClass( 'wpstats-google-adwords-bounce-rate-change', curInst.data[ 'period' ][ 'bounce_rate_change_direction' ], true );
+
+			// Account-level campaigns
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'account_level_campaigns' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-google-adwords-account-level-campaigns-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'account_level_campaigns' ],
+					rows = '';
+
+				if ( ! Object.keys( data ).length ) {
+					$table.hide();
+					curInst.$accountLevelCampaignsTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( campaignName, campaignData ) {
+						rows += '<tr>' +
+									'<td>' + campaignName + '</td>' +
+									'<td>' + campaignData[ 'clicks' ] + '</td>' +
+									'<td>' + campaignData[ 'impressions' ] + '</td>' +
+									'<td>' + campaignData[ 'click_through_rate' ] + '%</td>' +
+									'<td>' + currencySymbol + campaignData[ 'average_cost_per_click' ] + '</td>' +
+									'<td>' + currencySymbol + campaignData[ 'cost' ] + '</td>' +
+									'<td>' + campaignData[ 'conversions' ] + '</td>' +
+								'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+
+			// Account-level top keyword performance
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'account_level_top_keyword_performance' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-google-adwords-account-level-top-keyword-performance-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'account_level_top_keyword_performance' ],
+					rows = '';
+
+				if ( ! data.length ) {
+					$table.hide();
+					curInst.$accountLevelTopKeywordPerformanceTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( i, v ) {
+						rows += '<tr>' +
+							'<td>' + v[ 'keyword' ] + '</td>' +
+							'<td>' + v[ 'campaign_name' ] + '</td>' +
+							'<td>' + v[ 'clicks' ] + '</td>' +
+							'<td>' + v[ 'impressions' ] + '</td>' +
+							'<td>' + v[ 'click_through_rate' ] + '%</td>' +
+							'<td>' + currencySymbol + v[ 'average_cost_per_click' ] + '</td>' +
+							'<td>' + currencySymbol + v[ 'cost' ] + '</td>' +
+							'<td>' + v[ 'conversions' ] + '</td>' +
+							'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+
+			// Campaign-level ad groups
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'campaign_level_ad_groups' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-google-adwords-campaign-level-ad-groups-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'campaign_level_ad_groups' ],
+					rows = '';
+
+				if ( ! Object.keys( data ).length ) {
+					$table.hide();
+					curInst.$campaignLevelAdGroupsTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( i, v ) {
+						rows += '<tr>' +
+							'<td>' + v[ 'ad_group_name' ] + '</td>' +
+							'<td>' + v[ 'clicks' ] + '</td>' +
+							'<td>' + v[ 'impressions' ] + '</td>' +
+							'<td>' + v[ 'click_through_rate' ] + '%</td>' +
+							'<td>' + currencySymbol + v[ 'average_cost_per_click' ] + '</td>' +
+							'<td>' + currencySymbol + v[ 'cost' ] + '</td>' +
+							'<td>' + v[ 'conversions' ] + '</td>' +
+							'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+
+			// Campaign-level top keyword performance
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'campaign_level_top_keyword_performance' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-google-adwords-campaign-level-top-keyword-performance-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'campaign_level_top_keyword_performance' ],
+					rows = '';
+
+				if ( ! Object.keys( data ).length ) {
+					$table.hide();
+					curInst.$campaignLevelTopKeywordPerformanceTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( i, v ) {
+						rows += '<tr>' +
+							'<td>' + v[ 'keyword' ] + '</td>' +
+							'<td>' + v[ 'ad_group_name' ] + '</td>' +
+							'<td>' + v[ 'clicks' ] + '</td>' +
+							'<td>' + v[ 'impressions' ] + '</td>' +
+							'<td>' + v[ 'click_through_rate' ] + '%</td>' +
+							'<td>' + currencySymbol + v[ 'average_cost_per_click' ] + '</td>' +
+							'<td>' + currencySymbol + v[ 'cost' ] + '</td>' +
+							'<td>' + v[ 'conversions' ] + '</td>' +
+							'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+		}
+
+		curInst.enableGridIcon();
+		curInst.enableSettingsIcon();
+
+		curInst.loadingDataTabData = false;
+		curInst.viewingDataTab = true;
+	});
+};
+
+/**
+ * Load settings tab data.
+ *
+ * @param {string} requestType Whether to request fresh or cached results. Important when there is an error, and we must request fresh results.
+ */
+GoogleAdwords.prototype.loadSettingsTabData = function( requestType ) {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();
+		return;
+	}
+
+	if ( 'detail' === this.viewName ) {
+		this.$dataTableColumns.fadeOut();
+	}
+	this.$integrationErrorContainer.fadeOut();
+	this.hideChartFigure();
+	var curInst = this,
+		$fadeOutObjects = ( 'mashboard' === this.viewName ) ?
+			this.$dataPointsContainer.add( this.$chartContainer ) :
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.$dataTableColumnsContent );
+
+	$fadeOutObjects.fadeOut( 400 ).promise().done( function () {
+		curInst.$loadingContainer.fadeIn( 400, function () {
+
+			var accountsDeferredObject = curInst.getAccountsDeferredObject();
+
+			if ( null != curInst.selectedCustomerId ) {
+				jQuery.when( accountsDeferredObject, curInst.getCampaignsDeferredObject(curInst.selectedCustomerId) ).done( function( accountResponseJSON, campaignResponseJSON ) {
+					var accountResponse = jQuery.parseJSON( accountResponseJSON[0] ),
+						campaignResponse = jQuery.parseJSON( campaignResponseJSON[0] );
+					curInst.displaySettingsTabData( accountResponse, campaignResponse );
+				});
+			} else {
+				jQuery.when( accountsDeferredObject ).done( function( accountResponseJSON ) {
+					var accountResponse = jQuery.parseJSON( accountResponseJSON[0] );
+					curInst.displaySettingsTabData( accountResponse, {} );
+				});
+			}
+		});
+	});
+};
+
+GoogleAdwords.prototype.getAccountsDeferredObject = function() {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_google_adwords_api_query',
+		query: 'get_accounts'
+	});
+};
+GoogleAdwords.prototype.getCampaignsDeferredObject = function(customerId) {
+	return jQuery.get( ajaxurl, {
+		action: 'wpstats_ajax_google_adwords_api_query',
+		query: 'get_campaigns',
+		customer_id: customerId
+	});
+};
+
+/**
+ * Display settings tab data.
+ *
+ * @param {Object} accountResponse Settings tab response data.
+ * @param {Object} campaignResponse Settings tab response data.
+ */
+GoogleAdwords.prototype.displaySettingsTabData = function( accountResponse, campaignResponse ) {
+	var curInst = this;
+	this.$integrationErrorContainer.fadeOut();
+	curInst.$loadingContainer.fadeOut( 400, function () {
+
+		// Accounts
+
+		// error
+		if ( 'error' === accountResponse[ 'responseType' ] ) {
+			var context = accountResponse[ 'responseContext' ];
+			if ( 'authorization_required' === context ) {
+				curInst.$settingsTabAddAccountsSection.fadeIn();
+			} else {
+				if ( curInst.translations[ 'google_adwords_api_errors' ].hasOwnProperty( context ) ) {
+					curInst.$integrationErrorContainer.find('>p').html(curInst.translations[ 'google_adwords_api_errors' ][context]);
+					curInst.$integrationErrorContainer.fadeIn();
+				}
+				curInst.$settingsTabDeauthorizeSection.fadeIn();
+			}
+		} else {
+
+			if ( 'success' === accountResponse[ 'responseType' ] ) {
+				var selectHTML = '',
+					$accountSelect = jQuery('#wpstats-google-adwords-account-selection');
+
+				jQuery.each(accountResponse[ 'data' ], function (customerId, customerData) {
+					selectHTML += '<optgroup label="' + customerData[ 'customer' ] + ' (' + customerId + ')">';
+					jQuery.each(customerData[ 'managedCustomers' ], function (managedCustomerId, managedCustomerName) {
+						var selected = ( curInst.selectedCustomerId == managedCustomerId ) ? 'selected="selected"' : '';
+						selectHTML += '<option value="' + managedCustomerId.toString() + '" ' + selected + '>' + managedCustomerName + '</option>';
+					});
+					selectHTML += '</optgroup>';
+				});
+
+				$accountSelect.html(selectHTML);
+
+				curInst.$settingsTabAddAccountsSection.fadeIn();
+				curInst.$settingsTabAccountSelectionSection.fadeIn();
+				$accountSelect.chosen({
+					max_selected_options: 1,
+					width: '100%'
+				});
+				//$accountSelect.trigger('chosen:updated');
+
+				$accountSelect.off('change');
+				$accountSelect.on( 'change', function() {
+					var customerId = jQuery( this).val();
+					if ( 'select' == customerId || customerId == curInst.selectedCustomerId ) {
+						return;
+					}
+					curInst.selectedCustomerId = customerId;
+					curInst.$settingsTabCampaignSelectionSection.fadeOut( 400, function() {
+						curInst.$campaignSectionLoadingIcon.fadeIn( 400, function() {
+							jQuery.get(ajaxurl, {
+								action: 'wpstats_ajax_google_adwords_api_query',
+								query: 'save_customer_id',
+								google_adwords_selected_customer_id: customerId
+							}, function () {
+								jQuery.when(curInst.getCampaignsDeferredObject(customerId)).done(function (acampaignResponseJSON) {
+									var acampaignResponse = jQuery.parseJSON(acampaignResponseJSON);
+									curInst.displaySettingsTabData(accountResponse, acampaignResponse);
+								});
+							});
+						});
+					});
+				});
+			}
+
+			// Campaigns
+			if ( campaignResponse.hasOwnProperty('responseType') && 'error' === campaignResponse[ 'responseType' ] ) {
+				curInst.$campaignSectionLoadingIcon.fadeOut();
+				curInst.$settingsTabCampaignSelectionSection.fadeOut();
+				var context = campaignResponse[ 'responseContext' ];
+				if ( curInst.translations[ 'google_adwords_api_errors' ].hasOwnProperty( context ) ) {
+					curInst.$integrationErrorContainer.find( '>p').html( curInst.translations[ 'google_adwords_api_errors' ][ context ] );
+					curInst.$integrationErrorContainer.fadeIn();
+				}
+			} else if (campaignResponse.hasOwnProperty('responseType') && 'success' === campaignResponse[ 'responseType' ]) {
+
+				curInst.$campaignSectionLoadingIcon.fadeOut();
+
+				var $campaignSelect = jQuery('#wpstats-google-adwords-campaign-selection'),
+					$saveCampaignId = jQuery('#wpstats-google-adwords-save-campaign');
+
+				var campaignSelectHTML = '',
+					campaignsArr = [];
+				if ( jQuery.isArray( campaignResponse[ 'data' ] ) ) {
+					jQuery.each(campaignResponse[ 'data' ], function (i, v) {
+						campaignsArr.push(v);
+					});
+					campaignsArr.sort(function (a, b) {
+						var aName = a.name.toLowerCase(),
+							bName = b.name.toLowerCase();
+						return ( ( aName < bName ) ? -1 : ( ( aName > bName ) ? 1 : 0 ) );
+					});
+				} else {
+					campaignsArr = [
+						{ id: campaignResponse[ 'data' ][ 'id' ], name: campaignResponse[ 'data' ][ 'name' ] }
+					];
+				}
+
+				var campaignsLen = campaignsArr.length;
+				for (var b = 0; b < campaignsLen; ++b) {
+					var campaignSelected = ( curInst.selectedCampaignId == campaignsArr[b][ 'id' ] ) ? 'selected="selected"' : '';
+					campaignSelectHTML += '<option value="' + campaignsArr[b][ 'id' ] + '" ' + campaignSelected + '>' + campaignsArr[b][ 'name' ] + '</option>';
+				}
+				$campaignSelect.html( campaignSelectHTML );
+
+				curInst.$campaignSectionLoadingIcon.fadeOut( 400, function() {
+					$saveCampaignId.show();
+					curInst.$campaignSectionDescription.show();
+					// When a campaign is saved
+					$saveCampaignId.off('click');
+					$saveCampaignId.one('click', function (e) {
+						e.preventDefault();
+						curInst.$integrationErrorContainer.fadeOut();
+						curInst.disableSettingsIcon();
+						var campaignId = $campaignSelect.val();
+						curInst.selectedCampaignId = campaignId;
+						var customerId = $accountSelect.val();
+
+						// Customer ids the same (load & display data)
+						if (customerId == curInst.selectedCustomerId) {
+							curInst.$settingsTabSections.fadeOut(400).promise().done(function () {
+								curInst.$loadingContainer.fadeIn(400, function () {
+									jQuery.get(ajaxurl, {
+										action: 'wpstats_ajax_google_adwords_api_query',
+										query: 'save_campaign_id',
+										google_adwords_selected_campaign_id: campaignId
+									}, function () {
+										curInst.data = null;
+										if ('detail' === curInst.viewName) {
+											curInst.loadedAllData = false;
+										}
+										curInst.loadDataTabData();
+									});
+								});
+							});
+						} else { // customer ids not the same, load new campaigns
+							curInst.selectedCustomerId = customerId;
+							var fadeOutObjects = $campaignSelect.add($saveCampaignId).add(curInst.$campaignSectionDescription);
+							fadeOutObjects.fadeOut(400).promise().done(function () {
+								curInst.$campaignSectionLoadingIcon.fadeIn(400, function () {
+									jQuery.get(ajaxurl, {
+										action: 'wpstats_ajax_google_adwords_api_query',
+										query: 'save_campaign_id',
+										google_adwords_selected_campaign_id: campaignId,
+										google_adwords_selected_customer_id: customerId
+									}, function () {
+										jQuery.when(curInst.getAccountsDeferredObject(), curInst.getCampaignsDeferredObject(curInst.selectedCustomerId)).done(function (accountResponseJSON, campaignResponseJSON) {
+											var accountResponse = jQuery.parseJSON(accountResponseJSON[0]),
+												campaignResponse = jQuery.parseJSON(campaignResponseJSON[0]);
+											curInst.displaySettingsTabData(accountResponse, campaignResponse);
+										});
+									});
+								});
+							});
+						}
+					});
+					curInst.$settingsTabCampaignSelectionSection.fadeIn();
+					$campaignSelect.chosen({
+						max_selected_options: 1,
+						width: '100%'
+					});
+					$campaignSelect.trigger('chosen:updated');
+				});
+			}
+			curInst.$settingsTabDeauthorizeSection.fadeIn();
+		}
+
+		curInst.viewingSettingsTab = true;
+		curInst.loadingSettingsTabData = false;
+
+		// Enable settings icon if there is data
+		if ( null != curInst.data ) {
+			curInst.enableSettingsIcon();
+		}
+
+		if ( curInst.$settingsTabAddAccountsSection.is( ':visible' ) ) {
+			var $authorize = jQuery( '#wpstats-google-adwords-add-accounts' );
+			$authorize.off( 'click' );
+			$authorize.on( 'click', function( event ) {
+				event.preventDefault();
+				if ( null != curInst.authPopupWindowIntervalId ) {
+					clearInterval( curInst.authPopupWindowIntervalId );
+				}
+				curInst.createPopupWindow( curInst.authPopupWindowURL, 'GoogleAdwordsAuthPopup', 900, 500, null );
+				curInst.authPopupWindowIntervalId = setInterval( function() {
+					try {
+						if ( null == curInst.popupWindow || curInst.popupWindow.closed ) {
+							clearInterval( curInst.authPopupWindowIntervalId );
+						}
+						if ( curInst.popupWindow.location.hasOwnProperty( 'href' ) && ( curInst.authPopupWindowCompleteURL === curInst.popupWindow.location.href || curInst.authPopupWindowCompleteURL + '#' === curInst.popupWindow.location.href ) ) {
+							curInst.popupWindow.close();
+							clearInterval( curInst.authPopupWindowIntervalId );
+							curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+								curInst.loadSettingsTabData( 'fresh' );
+							});
+						}
+					} catch (e) {
+					}
+				}, 100 );
+			});
+		}
+
+		if ( curInst.$settingsTabDeauthorizeSection.is( ':visible' ) ) {
+			var $deauthorize = jQuery( '#wpstats-google-adwords-deauthorize' );
+			$deauthorize.off( 'click' );
+			$deauthorize.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.setup = false;
+				curInst.$integrationErrorContainer.fadeOut();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_google_adwords_api_query',
+							query: 'deauthorize'
+						}, function() {
+							curInst.setup = false;
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = false;
+							curInst.loadDataTabData();
+						} );
+					} );
+				});
+			});
+
+			var $deauthorizeLicense = jQuery( '#wpstats-google-adwords-deauthorize-license' );
+			$deauthorizeLicense.off( 'click' );
+			$deauthorizeLicense.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.setup = false;
+				curInst.$integrationErrorContainer.fadeOut();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_google_adwords_api_query',
+							query: 'deauthorize_license'
+						}, function() {
+							curInst.setup = false;
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = false;
+							curInst.loadDataTabData();
+						} );
+					} );
+				});
+			});
+		}
+	});
+};
+
+GoogleAdwords.prototype.resizeChart = function() {
+	if ( null != this.data ) {
+		this.chartInstance.shutdown();
+		this.chartData[0].data = getChartData(this.data[ 'chart_data' ][ 'clicks' ], this.$chart, this, 'daily');
+		this.chartData[1].data = getChartData(this.data[ 'chart_data' ][ 'avg_cost_per_click' ], this.$chart, this, 'daily');
+		this.chartData[1].yaxis = 2;
+		this.chartInstance = this.$chart.plot(this.chartData, this.chartOptions).data('plot');
+	}
+};
+
+/*
+ * MailChimp
+ */
+function MailChimp( viewName ) {
+
+	Integration.call( this, viewName );
+
+	this.integrationName = 'MailChimp';
+	this.integrationId = 'mailchimp';
+
+	this.$loadingContainer = jQuery('#wpstats-mailchimp-loading-container');
+
+	this.translations = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'trans' ] :
+		wpstats_mailchimp[ 'trans' ];
+
+	this.$integrationErrorContainer = jQuery('#wpstats-mailchimp-error-container');
+
+	/* Data */
+	this.data = null; // Contains data for the chart and data points.
+	this.loadingDataTabData = false;
+	this.viewingDataTab = false;
+	this.loadedAllData = false; // Detail page specific. Whether all data was successfully loaded or at least attempted.
+	this.$dataTableColumnsContent = jQuery('.wpstats-data-table-column-content');
+
+	/* Data Points */
+	this.$dataTabContent = jQuery('#wpstats-mailchimp-data-tab-content');
+	this.$dataPointsContainer = jQuery('#wpstats-mailchimp-data-points-container');
+
+	/* Chart */
+	this.chartInstance = null;
+	this.chartID = 'wpstats-mailchimp-chart';
+	this.$chart = jQuery('#' + this.chartID);
+	this.$chartContainer = jQuery('#wpstats-mailchimp-chart-container');
+	this.chartData = [
+		{
+			color: '#FEBE12',
+			data: [],
+			label: 'Unique Opens'
+		},
+		{
+			color: '#4f9ad8',
+			data: [],
+			label: 'Unique Clicks'
+		}
+	];
+
+	/* Grid */
+	this.gridIconSelector = '#wpstats-mailchimp-grid-icon';
+	this.$gridIcon = jQuery(this.gridIconSelector);
+	this.gridIconContentSelector = '#wpstats-mailchimp-grid-icon-content';
+	this.gridIconChildrenContent = jQuery('#wpstats-mailchimp-grid-icon-content').html();
+	this.gridDisplayed = false;
+	this.gridClickEventName = 'click.mailchimp_grid';
+	this.gridMouseoverEventName = 'mouseover.mailchimp_grid';
+	this.gridMouseleaveEventName = 'mouseleave.mailchimp_grid';
+	this.gridMouseoutEventName = 'mouseout.mailchimp_grid';
+
+	/* Settings */
+	this.loadingSettingsTabData = false;
+	this.viewingSettingsTab = false;
+	this.$settingsIcon = jQuery('#wpstats-mailchimp-settings-icon');
+	this.$settingsTabSections = jQuery('.wpstats-mailchimp-settings-tab-section');
+	this.$settingsTabAuthorizeSection = jQuery('#wpstats-mailchimp-settings-authorize-section');
+	this.$settingsTabDeauthorizeSection = jQuery('#wpstats-mailchimp-settings-deauthorize-section');
+	this.$settingsTabValidAccessTokenSection = jQuery( '#wpstats-mailchimp-settings-valid-access-token-section' );
+	this.$settingsTabInvalidAccessTokenSection = jQuery( '#wpstats-mailchimp-settings-invalid-access-token-section' );
+
+	this.settingsClickEventName = 'click.mailchimp_settings';
+
+	if ('detail' === this.viewName) {
+		this.$dataTableColumns = jQuery( '.wpstats-service-detail-data-table-column' );
+		this.$topCampaignsTableErrorContainer = jQuery( '#wpstats-mailchimp-top-campaigns-data-error-container' );
+		this.$topListsTableErrorContainer = jQuery( '#wpstats-mailchimp-top-lists-data-error-container' );
+	}
+
+	this.authPopupWindowIntervalId = null;
+	// URL popup window first directs to authorize the user.
+	this.authPopupWindowURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'mailchimp' ][ 'auth_popup_window_url' ] :
+		wpstats_mailchimp[ 'auth_popup_window_url' ];
+	// URL popup window directs to when authorization is complete.
+	this.authPopupWindowCompleteURL = ( 'mashboard' === this.viewName ) ?
+		wpstats_mashboard[ 'auth_popup_window_complete_url' ] :
+		wpstats_mailchimp[ 'auth_popup_window_complete_url' ];
+
+	this.currentUserCanAccessSettings = ( 'mashboard' === viewName ) ? wpstats_mashboard[ 'current_user_can_access_settings' ] : wpstats_mailchimp[ 'current_user_can_access_settings' ];
+	this.userCannotAccessSettingsErrorMsg = this.translations[ 'current_user_settings_access_denied_error' ];
+	this.$userCannotAccessSettingsError = "<p class='wpstats-error-message wpstats-mailchimp-settings-access-denied-error'>" + this.userCannotAccessSettingsErrorMsg + "<p>";
+}
+MailChimp.prototype = createObject( Integration.prototype );
+MailChimp.prototype.constructor = MailChimp;
+
+/**
+ * Load data for the data tab.
+ */
+MailChimp.prototype.loadDataTabData = function() {
+	this.hideChartFigure();
+	this.$integrationErrorContainer.fadeOut();
+	this.viewingSettingsTab = false;
+	this.loadingDataTabData = true;
+	var curInst = this;
+	this.$settingsTabSections
+		.add( this.$chartContainer )
+		.add( this.$dataPointsContainer )
+		.add( this.$dataTableColumnsContent )
+		.fadeOut( 400 ).promise().done( function() {
+			curInst.$loadingContainer.fadeIn( 400, function() {
+				if ( 'mashboard' === curInst.viewName ) {
+					// If data exists and the settings icon was clicked, just display the data.
+					if ( null != curInst.data ) {
+						curInst.displayDataTabData();
+						return;
+					}
+					jQuery.get( ajaxurl, {
+						action: 'wpstats_ajax_mailchimp_api_query',
+						query: 'get_mashboard_view_data',
+						start_date: curInst.startDate,
+						end_date: curInst.endDate
+					}, function ( response ) {
+						response = jQuery.parseJSON( response );
+						if ( null != response.data ) {
+							curInst.data = response.data;
+							curInst.displayDataTabData();
+						} else {
+							curInst.loadSettingsTabData( 'fresh' );
+						}
+					} );
+				} else if ( 'detail' === curInst.viewName ) {
+					if ( true === curInst.loadedAllData ) {
+						curInst.displayDataTabData();
+					} else {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_mailchimp_api_query',
+							query: 'get_detail_view_data',
+							start_date: curInst.startDate,
+							end_date: curInst.endDate
+						}, function ( response ) {
+							response = jQuery.parseJSON( response );
+							if ( null != response.data ) {
+								curInst.data = response.data;
+								curInst.displayDataTabData();
+							} else {
+								curInst.loadSettingsTabData( 'fresh' );
+							}
+						} );
+					}
+				}
+			});
+		});
+};
+
+/**
+ * Display the data for the data tab.
+ */
+MailChimp.prototype.displayDataTabData = function() {
+	var curInst = this;
+	this.$integrationErrorContainer.fadeOut();
+	this.$loadingContainer.fadeOut( 400, function() {
+
+		curInst.showChartFigure();
+		curInst.$dataTabContent.fadeIn();
+		curInst.$chartContainer.show();
+
+		// Do we need to destroy the chart?
+		if ( null !== curInst.chartInstance ) {
+			curInst.chartInstance.shutdown();
+		}
+
+		// Create chart
+		curInst.chartData[0].data = getChartData( curInst.data[ 'chart_data' ][ 'unique_opens' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartData[1].data = getChartData( curInst.data[ 'chart_data' ][ 'unique_clicks' ], curInst.$chart, curInst, curInst.frequency );
+		curInst.chartOptions.tooltipOpts.content = function( label, x, y, item ) {
+			var value = y.toString();
+			if ( 'MailChimp' === curInst.integrationName  ) {
+				if ( value > 0 ) {
+					var tooltipContent = '<strong>' + value + '</strong><br>' + x;
+					jQuery.each( curInst.data[ 'period' ][ 'date_campaigns' ], function( campaignDate, campaignData ) {
+						campaignDate = getMonthDayFormatted( campaignDate );
+						var campaignsCount = 0;
+						if ( campaignDate === x )  {
+							jQuery.each ( campaignData, function( campaignId, campaignName ) {
+								if ( campaignsCount >= 3 ) {
+									tooltipContent += '...';
+								} else {
+									tooltipContent += '<br>' + campaignName + ' (' + campaignId + ')';
+									campaignsCount++;
+								}
+							});
+						}
+					});
+					return tooltipContent;
+				}
+			}
+			return '<strong>' + value + '</strong><br>' + x;
+		};
+		curInst.chartInstance = curInst.$chart.plot( curInst.chartData, curInst.chartOptions ).data( 'plot' );
+		curInst.$dataPointsContainer.show();
+
+		// Opens (Unique)
+		jQuery( '#wpstats-mailchimp-unique-opens' ).html( curInst.data[ 'period' ][ 'unique_opens' ] );
+		jQuery( '#wpstats-mailchimp-unique-opens-change' ).html( curInst.data[ 'period' ][ 'unique_opens_change' ] );
+		var $opensChangeInfo = jQuery( '#wpstats-mailchimp-unique-opens-change-info' );
+		curInst.changeTooltipContent( $opensChangeInfo, curInst.data[ 'period' ][ 'previous_unique_opens' ] + ' ' + $opensChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-unique-opens-change-direction', curInst.data[ 'period' ][ 'unique_opens_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-mailchimp-unique-opens-change', curInst.data[ 'period' ][ 'unique_opens_change_direction' ], false );
+
+		// Clicks (Unique)
+		jQuery( '#wpstats-mailchimp-unique-clicks' ).html( curInst.data[ 'period' ][ 'unique_clicks' ] );
+		jQuery( '#wpstats-mailchimp-unique-clicks-change' ).html( curInst.data[ 'period' ][ 'unique_clicks_change' ] );
+		var $clicksChangeInfo = jQuery( '#wpstats-mailchimp-unique-clicks-change-info' );
+		curInst.changeTooltipContent( $clicksChangeInfo, curInst.data[ 'period' ][ 'previous_unique_clicks' ] + ' ' + $clicksChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-unique-clicks-change-direction', curInst.data[ 'period' ][ 'unique_clicks_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-mailchimp-unique-clicks-change', curInst.data[ 'period' ][ 'unique_clicks_change_direction' ], false );
+
+		// Unsubscribed
+		jQuery( '#wpstats-mailchimp-unsubscribed' ).html( curInst.data[ 'period' ][ 'unsubscribed' ] );
+		jQuery( '#wpstats-mailchimp-unsubscribed-change' ).html( curInst.data[ 'period' ][ 'unsubscribed_change' ] );
+		var $unsubscribedChangeInfo = jQuery( '#wpstats-mailchimp-unsubscribed-change-info' );
+		curInst.changeTooltipContent( $unsubscribedChangeInfo, curInst.data[ 'period' ][ 'previous_unsubscribed' ] + ' ' + $unsubscribedChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-unsubscribed-change-direction', curInst.data[ 'period' ][ 'unsubscribed_change_direction' ], true );
+		setDataPointChangeClass( 'wpstats-mailchimp-unsubscribed-change', curInst.data[ 'period' ][ 'unsubscribed_change_direction' ], true );
+
+		// Subscribers
+		jQuery( '#wpstats-mailchimp-subscribers' ).html( curInst.data[ 'period' ][ 'subscribers' ] );
+		jQuery( '#wpstats-mailchimp-subscribers-change' ).html( curInst.data[ 'period' ][ 'subscribers_change' ] );
+		var $subscribersChangeInfo = jQuery( '#wpstats-mailchimp-subscribers-change-info' );
+		curInst.changeTooltipContent( $subscribersChangeInfo, curInst.data[ 'period' ][ 'previous_subscribers' ] + ' ' + $subscribersChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-subscribers-change-direction', curInst.data[ 'period' ][ 'subscribers_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-mailchimp-subscribers-change', curInst.data[ 'period' ][ 'subscribers_change_direction' ], false );
+
+		// Open Rate
+		jQuery( '#wpstats-mailchimp-open-rate' ).html( curInst.data[ 'period' ][ 'open_rate' ] );
+		jQuery( '#wpstats-mailchimp-open-rate-change' ).html( curInst.data[ 'period' ][ 'open_rate_change' ] );
+		var $openRateChangeInfo = jQuery( '#wpstats-mailchimp-open-rate-change-info' );
+		curInst.changeTooltipContent( $openRateChangeInfo, curInst.data[ 'period' ][ 'previous_open_rate' ] + '% ' + $openRateChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-open-rate-change-direction', curInst.data[ 'period' ][ 'open_rate_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-mailchimp-open-rate-change', curInst.data[ 'period' ][ 'open_rate_change_direction' ], false );
+
+		// Click Rate
+		jQuery( '#wpstats-mailchimp-click-rate' ).html( curInst.data[ 'period' ][ 'click_rate' ] );
+		jQuery( '#wpstats-mailchimp-click-rate-change' ).html( curInst.data[ 'period' ][ 'click_rate_change' ] );
+		var $clickRateChangeInfo = jQuery( '#wpstats-mailchimp-click-rate-change-info' );
+		curInst.changeTooltipContent( $clickRateChangeInfo, curInst.data[ 'period' ][ 'previous_click_rate' ] + '% ' + $clickRateChangeInfo.attr( 'data-tooltip-backup' ) );
+		setDataPointChangeDirectionClass( 'wpstats-mailchimp-click-rate-change-direction', curInst.data[ 'period' ][ 'click_rate_change_direction' ], false );
+		setDataPointChangeClass( 'wpstats-mailchimp-click-rate-change', curInst.data[ 'period' ][ 'click_rate_change_direction' ], false );
+
+		if ( 'detail' === curInst.viewName ) {
+
+			// Industry Average Open Rate
+			jQuery( '#wpstats-mailchimp-industry-average-open-rate' ).html( curInst.data[ 'period' ][ 'industry_average_open_rate' ] );
+			jQuery( '#wpstats-mailchimp-industry-average-open-rate-change' ).html( curInst.data[ 'period' ][ 'industry_average_open_rate_change' ] );
+			var $industryAvgOpenRateChangeInfo = jQuery( '#wpstats-mailchimp-industry-average-open-rate-change-info' );
+			curInst.changeTooltipContent( $industryAvgOpenRateChangeInfo, curInst.data[ 'period' ][ 'previous_industry_average_open_rate' ] + '% ' + $industryAvgOpenRateChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-mailchimp-industry-average-open-rate-change-direction', curInst.data[ 'period' ][ 'industry_average_open_rate_change_direction' ], false );
+			setDataPointChangeClass( 'wpstats-mailchimp-industry-average-open-rate-change', curInst.data[ 'period' ][ 'industry_average_open_rate_change_direction' ], false );
+
+			// Bounces
+			jQuery( '#wpstats-mailchimp-bounces' ).html( curInst.data[ 'period' ][ 'bounces' ] );
+			jQuery( '#wpstats-mailchimp-bounces-change' ).html( curInst.data[ 'period' ][ 'bounces_change' ] );
+			var $bouncesChangeInfo = jQuery( '#wpstats-mailchimp-bounces-change-info' );
+			curInst.changeTooltipContent( $bouncesChangeInfo, curInst.data[ 'period' ][ 'previous_bounces' ] + ' ' + $bouncesChangeInfo.attr( 'data-tooltip-backup' ) );
+			setDataPointChangeDirectionClass( 'wpstats-mailchimp-bounces-change-direction', curInst.data[ 'period' ][ 'bounces_change_direction' ], true );
+			setDataPointChangeClass( 'wpstats-mailchimp-bounces-change', curInst.data[ 'period' ][ 'bounces_change_direction' ], true );
+
+			// Top Campaigns
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'top_campaigns' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-mailchimp-top-campaigns-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'top_campaigns' ],
+					rows = '';
+
+				if ( ! Object.keys( data ).length ) {
+					$table.hide();
+					curInst.$topCampaignsTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( index, campaignData ) {
+						rows += '<tr>' +
+							'<td>' + campaignData[ 'name' ] + ' (' + campaignData[ 'id' ] + ')</td>' +
+							'<td>' + campaignData[ 'unique_opens' ] + '</td>' +
+							'<td>' + campaignData[ 'unique_clicks' ] + '</td>' +
+							'<td>' + campaignData[ 'unsubscribed' ] + '</td>' +
+							'<td>' + campaignData[ 'open_rate' ] + '%</td>' +
+							'<td>' + campaignData[ 'click_rate' ] + '%</td>' +
+							'<td>' + campaignData[ 'send_time' ] + '</td>' +
+							'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+
+			// Top Lists
+			(function() {
+				if ( null == curInst.data[ 'period' ][ 'top_lists' ] ) {
+					return;
+				}
+				var $table = jQuery( '#wpstats-mailchimp-top-lists-table' ),
+					$columnContent = $table.parent(),
+					$column = $columnContent.parent(),
+					$tbody = $table.find( 'tbody' ),
+					data = curInst.data[ 'period' ][ 'top_lists' ],
+					rows = '';
+
+				if ( ! data.length ) {
+					$table.hide();
+					curInst.$topListsTableErrorContainer.show();
+				} else {
+					$tbody.html( '' );
+					jQuery.each( data, function ( i, v ) {
+						rows += '<tr>' +
+							'<td>' + v[ 'name' ] + ' (' + v[ 'id' ] + ')</td>' +
+							'<td>' + v[ 'open_rate' ] + '%</td>' +
+							'<td>' + v[ 'click_rate' ] + '%</td>' +
+							'<td>' + v[ 'subscribers' ] + '</td>' +
+							'<td>' + v[ 'average_subscribe_rate' ] + '%</td>' +
+							'<td>' + v[ 'average_unsubscribe_rate' ] + '%</td>' +
+							'</tr>';
+					} );
+					jQuery( rows ).appendTo( $tbody );
+					$table.show();
+				}
+				$columnContent.show();
+				$column.show();
+			})();
+		}
+
+		curInst.enableGridIcon();
+		curInst.enableSettingsIcon();
+
+		curInst.loadingDataTabData = false;
+		curInst.viewingDataTab = true;
+	});
+};
+
+/**
+ * Load settings tab data.
+ *
+ * @param {string} requestType Whether to request fresh or cached results. Important when there is an error, and we must request fresh results.
+ */
+MailChimp.prototype.loadSettingsTabData = function( requestType ) {
+
+	if ( ! this.currentUserCanAccessSettings ) {
+		this.displayCurrentUserCannotAccessSettingsError();;
+		return;
+	}
+
+	if ( 'detail' === this.viewName ) {
+		this.$dataTableColumns.fadeOut();
+	}
+	this.$integrationErrorContainer.fadeOut();
+	this.hideChartFigure();
+	var curInst = this,
+		$fadeOutObjects = ( 'mashboard' === this.viewName ) ?
+			this.$dataPointsContainer.add( this.$chartContainer ) :
+			this.$dataPointsContainer.add( this.$chartContainer ).add( this.$dataTableColumnsContent );
+
+	$fadeOutObjects.fadeOut( 400 ).promise().done( function () {
+		curInst.$loadingContainer.fadeIn( 400, function () {
+			jQuery.get( ajaxurl, {
+				action: 'wpstats_ajax_mailchimp_api_query',
+				query: 'get_status',
+				request_type: requestType
+			}, function ( response ) {
+				response = jQuery.parseJSON( response );
+				curInst.displaySettingsTabData( response );
+			});
+		});
+	});
+};
+
+/**
+ * Display settings tab data.
+ */
+MailChimp.prototype.displaySettingsTabData = function( response ) {
+	var curInst = this;
+	this.$integrationErrorContainer.fadeOut();
+	curInst.$loadingContainer.fadeOut( 400, function () {
+
+		if ( 'success' === response[ 'responseType' ] ) {
+			switch ( response[ 'responseContext' ] ) {
+				case 'valid_access_token':
+					curInst.$settingsTabValidAccessTokenSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		} else {
+			switch ( response[ 'responseContext' ] ) {
+				case 'authorization_required':
+					curInst.$settingsTabAuthorizeSection.fadeIn();
+					break;
+				case 'invalid_access_token':
+					curInst.$settingsTabInvalidAcccessTokenSection.fadeIn();
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+				default:
+					curInst.$settingsTabDeauthorizeSection.fadeIn();
+					break;
+			}
+		}
+
+		curInst.viewingSettingsTab = true;
+		curInst.loadingSettingsTabData = false;
+
+		// Enable settings icon if there is data
+		if ( null != curInst.data ) {
+			curInst.enableSettingsIcon();
+		}
+
+		// Setup is visible and clicked
+		if ( curInst.$settingsTabAuthorizeSection.is( ':visible' ) ) {
+			var $authorize = jQuery( '#wpstats-mailchimp-authorize' );
+			$authorize.off( 'click' );
+			$authorize.on( 'click', function( event ) {
+				event.preventDefault();
+				if ( null != curInst.authPopupWindowIntervalId ) {
+					clearInterval( curInst.authPopupWindowIntervalId );
+				}
+				curInst.createPopupWindow( curInst.authPopupWindowURL, 'MailChimpAuthPopup', 900, 500, null );
+				curInst.authPopupWindowIntervalId = setInterval( function() {
+					try {
+						if ( null == curInst.popupWindow || curInst.popupWindow.closed ) {
+							clearInterval( curInst.authPopupWindowIntervalId );
+						}
+						if ( curInst.popupWindow.location.hasOwnProperty( 'href' ) && ( curInst.authPopupWindowCompleteURL === curInst.popupWindow.location.href || curInst.authPopupWindowCompleteURL + '#' === curInst.popupWindow.location.href ) ) {
+							curInst.popupWindow.close();
+							clearInterval( curInst.authPopupWindowIntervalId );
+							curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+								curInst.loadDataTabData();
+							});
+						}
+					} catch (e) {
+					}
+				}, 100 );
+			});
+		}
+
+		// Deauthorize is visible & clicked
+		if ( curInst.$settingsTabDeauthorizeSection.is( ':visible' ) ) {
+			var $deauthorize = jQuery( '#wpstats-mailchimp-deauthorize' );
+			$deauthorize.off( 'click' );
+			$deauthorize.on( 'click', function( event ) {
+				event.preventDefault();
+				curInst.$integrationErrorContainer.fadeOut();
+				curInst.disableSettingsIcon();
+				curInst.$settingsTabSections.fadeOut( 400 ).promise().done( function() {
+					curInst.$loadingContainer.fadeIn( 400, function () {
+						jQuery.get( ajaxurl, {
+							action: 'wpstats_ajax_mailchimp_api_query',
+							query: 'deauthorize'
+						}, function() {
+							curInst.data = null;
+							curInst.viewingSettingsTab = false;
+							curInst.loadingSettingsTabData = true;
+							curInst.loadSettingsTabData( 'fresh' );
+						});
+					} );
+				});
+			});
+		}
+	});
+};
+
+MailChimp.prototype.resizeChart = function() {
+	if ( null != this.data ) {
+		this.chartInstance.shutdown();
+		this.chartData[0].data = getChartData(this.data[ 'chart_data' ][ 'unique_opens' ], this.$chart, this, 'daily');
+		this.chartData[1].data = getChartData(this.data[ 'chart_data' ][ 'unique_clicks' ], this.$chart, this, 'daily');
+		this.chartInstance = this.$chart.plot(this.chartData, this.chartOptions).data('plot');
+	}
+};
+
+/**
+ * Return a specific integration object.
+ *
+ * @since 0.1.4
+ *
+ * @param {string} integrationName The name of the integration to return.
+ *
+ * @param {string} viewName        The type of view this integration will be used for (mashboard or detail currently supported).
+ *
+ * @returns {null|Object} The integration object or null if an invalid integration name was supplied.
+ */
+function getIntegration( integrationName, viewName ) {
+	switch ( integrationName ) {
+		case 'googleAnalytics':
+			return new GoogleAnalytics( viewName );
+			break;
+		case 'facebook':
+			return new Facebook( viewName );
+			break;
+		case 'twitter':
+			return new Twitter( viewName );
+			break;
+		case 'googleAdwords':
+			return new GoogleAdwords( viewName );
+			break;
+		case 'mailchimp':
+			return new MailChimp( viewName );
+			break;
+		default:
+			break;
+	}
+}
+
+/**
+ * Return all integration objects.
+ *
+ * @since 0.1.4
+ *
+ * @param {string} viewName The view name (mashboard or detail).
+ *
+ * @param {Object} mashboardVisibilityStatus Object of card ids as properties and whether they should be visible or not as values (1 or 0).
+ *
+ * @returns {Object[]}
+ */
+function getIntegrations( viewName, mashboardVisibilityStatus ) {
+	var integrations = [];
+
+	if ( mashboardVisibilityStatus.hasOwnProperty( 'googleanalytics_1' ) && mashboardVisibilityStatus[ 'googleanalytics_1' ] == '1' ) {
+		integrations.push( new GoogleAnalytics( viewName ) );
+	}
+	if ( mashboardVisibilityStatus.hasOwnProperty( 'facebook_2' ) && mashboardVisibilityStatus[ 'facebook_2' ] == '1' ) {
+		integrations.push( new Facebook( viewName ) );
+	}
+	if ( mashboardVisibilityStatus.hasOwnProperty( 'twitter_3' ) && mashboardVisibilityStatus[ 'twitter_3' ] == '1' ) {
+		integrations.push( new Twitter( viewName ) );
+	}
+	if ( mashboardVisibilityStatus.hasOwnProperty( 'googleadwords_11' ) && mashboardVisibilityStatus[ 'googleadwords_11' ] == '1' ) {
+		integrations.push( new GoogleAdwords( viewName ) );
+	}
+	if ( mashboardVisibilityStatus.hasOwnProperty( 'mailchimp_8' ) && mashboardVisibilityStatus[ 'mailchimp_8' ] == '1' ) {
+		integrations.push( new MailChimp( viewName ) );
+	}
+
+	return integrations;
+}
+
+function initTooltips() {
+	jQuery('.wpstats-tooltip' ).each( function() {
+		var $tooltip = jQuery( this );
+		if ( $tooltip .hasClass( 'wpstats-disabled' ) ) {
+			return true;
+		}
+		$tooltip.tooltip({
+			content: $tooltip.attr( 'data-tooltip' ),
+			items  : '[data-tooltip]'
+		});
+	});
+}
+
+/**
+ * Allows each integration's card to be sorted, and automatically saves the positions after each one has been dropped.
+ *
+ * @param {Object[]} integrations
+ *
+ * @param {int} integrationsLen
+ */
+function makeCardsSortable( integrations, integrationsLen ) {
+
+	var sortableElementSelector = '.wpstats-cards-column',
+		$sortableElement = jQuery( sortableElementSelector );
+
+	$sortableElement.sortable({
+		connectWith: sortableElementSelector,
+		cursor: 'move',
+		forcePlaceholderSize: true,
+		handle: '.wpstats-card-drag-icon',
+		placeholder: 'wpstats-card-placeholder',
+		revert: 400,
+		/* Triggered when sorting stops */
+		stop: function () {
+			var data = {};
+			$sortableElement.each( function  (i, obj ) {
+				var id = jQuery( obj ).attr( 'id' );
+				data[ id ] = jQuery( obj ).sortable( 'toArray' );
+			});
+			for ( var i = 0; i < integrationsLen; ++i ) {
+				integrations[ i ].resizeChart();
+			}
+			jQuery.post( ajaxurl, {
+				'action': 'wpstats_ajax_save_mashboard_card_positions',
+				'data'  : data
+			});
+		}
+	});
+}

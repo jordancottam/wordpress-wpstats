@@ -1,0 +1,392 @@
+/*
+	This file's CSS is used on the Mashboard page ONLY.
+
+	Note: properties are defined in alphabetical order.
+*/
+
+#wpstats-default-logo {
+	margin-left: 20px;
+}
+
+#wpstats-date-range-container {
+	margin-left: 0;
+	overflow: hidden;
+}
+
+#wpstats-start-date-container {
+	float: left;
+	text-align: right;
+	width: 50%;
+}
+
+#wpstats-end-date-container {
+	float: left;
+	margin-left: 20px;
+	text-align: left;
+}
+
+.wpstats-card-columns-container {
+	margin-top: 20px;
+	overflow: hidden;
+}
+
+.wpstats-card-error-container {
+	display: none;
+	margin-bottom: 15px;
+}
+
+/*
+	Loading
+*/
+
+/* Container for loading icon when page is loaded before cards are displayed */
+#wpstats-cards-loading-container {
+	margin: 40px 0 0 20px;
+	text-align: center;
+}
+
+/* Card settings profile(s) container */
+.wpstats-card-settings-profiles-container {
+
+}
+/* Profiles themselves */
+.wpstats-card-settings-profiles {
+	width: 100%;
+}
+.wpstats-card-settings-save-profiles {
+	display: block;
+	margin-top: 5px !important;
+}
+
+/*
+	Cards
+*/
+
+/* Card container */
+.wpstats-card-container {
+	/*border: 1px solid #000;*/
+	margin: 0 0 20px 20px;
+}
+
+.wpstats-card {
+	background-color: rgba( 255, 255, 255, 0.6 );
+	word-wrap: break-word;
+	display: none;
+}
+
+/* Heading container: text, icons */
+.wpstats-card-header {
+	background: transparent;
+	filter: progid:DXImageTransform.Microsoft.gradient( startColorstr=#D9FFFFFF, endColorstr=#D9FFFFFF );
+	background: rgba( 255, 255, 255, 0.7 );
+	border-bottom: 1px solid #d7d7d7;
+	padding: 12px 10px 1px 10px;
+}
+
+/* Heading icon */
+.wpstats-card-drag-icon {
+	background: url( '../images/drag-icon.png' ) no-repeat;
+	display: inline-block;
+	height: 26px;
+	width: 21px;
+	cursor: move;
+}
+
+/* Heading text */
+.wpstats-card-heading {
+	color: #656565 !important;
+	display: inline-block;
+	font-size: 17px !important;
+	font-weight: 600 !important;
+	margin: 2px 0 0 5px !important;
+	vertical-align: top;
+}
+
+/* Content for card settings icon */
+.wpstats-card-settings-content {
+	display: none;
+}
+
+/* Card content */
+.wpstats-card-content {
+	background: transparent;
+	filter: progid:DXImageTransform.Microsoft.gradient( startColorstr=#CCFFFFFF, endColorstr=#CCFFFFFF );
+	background: rgba( 255, 255, 255, 0.6 );
+	padding: 18px 20px 20px 20px;
+	overflow: hidden;
+}
+
+/* The empty container where a card can be dropped */
+.wpstats-card-placeholder {
+	border: 2px dashed #ccc;
+	margin: 0 0 20px 20px;
+}
+
+.wpstats-card-image-container {
+	margin-top: 15px;
+	text-align: center;
+}
+
+/* Card detail link */
+.wpstats-card-details-container {
+	text-align: right;
+}
+
+.wpstats-card-details {
+}
+
+/* Detail link at bottom right of each card */
+.wpstats-card-details-link {
+	color: #72aa3f !important;
+	cursor: pointer;
+	text-decoration: none;
+}
+
+/*
+	Charts
+*/
+.wpstats-chart-loading-container {
+	margin-top: 10px;
+}
+.wpstats-mashboard-chart-container {
+
+}
+.wpstats-mashboard-chart {
+	cursor: crosshair;
+	height: 300px;
+	margin: 0;
+	max-height: 300px;
+	padding: 0;
+	width: 100%;
+}
+
+/*
+	Data points
+*/
+
+.wpstats-data-points-container {
+	display: none;
+	margin: 10px 0 0 15px;
+	overflow: hidden;
+}
+
+.wpstats-mashboard-data-point-column {
+	background: none !important;
+	float: left;
+	margin-bottom: 20px;
+	position: relative;
+	text-align: center;
+	width: 50%;
+}
+
+.wpstats-dashboard-data-point-header {
+	text-align: left;
+}
+
+.wpstats-dashboard-data-point-heading {
+}
+
+.wpstats-dashboard-data-point-heading-info {
+	background: url( '../images/info.png' ) no-repeat -2px 2px;
+	padding: 0 8px 4px 5px;
+	cursor: help;
+}
+
+.wpstats-dashboard-data-point-content {
+	margin-top: 20px;
+	text-align: left;
+}
+
+/* GA Bounce Rate */
+#wpstats-mashboard-google-analytics-bounce-rate {
+	position: relative;
+}
+
+.wpstats-donut {
+	height: 150px;
+	margin: 0 auto;
+	pointer-events: none;
+	text-align: left;
+}
+
+.wpstats-donut > svg > text:first-child > tspan {
+	font-size: 40px !important;
+}
+
+.wpstats-dashboard-data-point-footer {
+	margin-top: 5px;
+	position: relative;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.wpstats-dashboard-data-point-change  {
+	font-size: 1.5em;
+	font-weight: bolder;
+}
+
+.wpstats-dashboard-data-point-chart-key {
+	padding: 4px;
+	cursor: default;
+}
+
+#wpstats-google-analytics-users-chart-key {
+	background: url('../images/admin-sprite.png') 0 -133px;
+}
+
+#wpstats-google-analytics-page-views-chart-key {
+	background: url('../images/admin-sprite.png') 0 -74px;
+}
+
+.wpstats-dashboard-data-point-total {
+	font-family: 'Open Sans', sans-serif;
+	font-size: 3.3em;
+	font-weight: 800;
+}
+
+/*
+ * Settings Tab
+ */
+.wpstats-data-for-setting-control-loading-container {
+	margin-top: 5px;
+}
+
+/* Bounce rate change direction */
+#wpstats-mashboard-google-analytics-bounce-rate-change-direction {
+	left: 36px;
+	top: 70px;
+	position: absolute;
+	padding: 12px;
+}
+
+
+/* Data Point Column Media Queries */
+@media all and ( min-width: 0 ) and ( max-width: 500px ) {
+	.wpstats-mashboard-data-point-column {
+		width: 100%;
+	}
+}
+@media all and ( min-width: 800px ) and ( max-width: 1000px ) {
+	.wpstats-data-point-value {
+		font-size: 36px;
+	}
+}
+
+/*
+	Temporary
+*/
+
+@media screen and ( min-width: 0px ) and ( max-width: 350px ) {
+	.wpstats-card-container {
+		margin-left: 0;
+	}
+	#wpbody {
+		min-height: 1200px;
+	}
+	.wpstats-mashboard-data-point-column {
+		width: 100%;
+	}
+	.wpstats-vote-now-container > img {
+		width: 210px;
+	}
+	#wpstats-start-date-container, #wpstats-end-date-container {
+		float: none;
+		margin-left: 0;
+		text-align: inherit;
+		width: 100%;
+	}
+	#start_date, #end_date, #date_range {
+		margin-top: 5px;
+	}
+	.wpstats-google-adwords-data-point-value {
+		font-size: 34px;
+	}
+}
+
+@media screen and ( min-width: 350px ) and ( max-width : 800px ) {
+	.wpstats-card-container {
+		margin-left: 0;
+	}
+	.wpstats-vote-now-container > img {
+		width: 250px;
+	}
+	#wpstats-start-date-container, #wpstats-end-date-container {
+		float: none;
+		margin-left: 0;
+		text-align: inherit;
+		width: 100%;
+	}
+	#start_date, #end_date {
+		display: block;
+		margin: 5px auto;
+	}
+}
+
+@media screen and ( min-width: 1800px ) {
+	.wpstats-cards-column {
+		min-height: 100px;
+	}
+}
+
+#wpstats-facebook-error-container {
+	display: none;
+	padding: 1px 5px;
+	text-align: center;
+	margin-bottom: 10px;
+}
+
+/* Integration vote totals container */
+.wpstats-integration-vote-totals-container {
+	display: none;
+	font-size: 18px;
+	margin: 0 auto;
+	padding: 10px 0 0 0;
+	text-align: center;
+	width: 50%;
+}
+/* Integration vote total loading container */
+.wpstats-integration-vote-totals-loading-container {
+	margin-top: 5px;
+}
+/* Loading icon when voting for an integration */
+.wpstats-integration-vote-loading-container {
+	margin-top: 15px;
+}
+
+/* Initially hide all current Twitter data points from view */
+#wpstats-twitter-current-tweets-data-point,
+#wpstats-twitter-current-retweets-data-point,
+#wpstats-twitter-current-following-data-point,
+#wpstats-twitter-current-followers-data-point,
+#wpstats-twitter-current-mentions-data-point,
+/* Hide these MailChimp data points at first */
+#wpstats-mailchimp-open-rate-data-point,
+#wpstats-mailchimp-click-rate-data-point {
+	display: none;
+}
+
+/* Header used for Vote and Upgrading cards */
+.wpstats-placeholder-card-header {
+	color: #cf4c46;
+	font-size: 18px;
+	font-weight: bold;
+}
+
+/* Vote card */
+#wpstats-vote-integration-content-leave-review {
+	font-size: 15px;
+}
+
+.wpstats-integration-error-container p {
+	text-align: center;
+}
+
+/* Google Adwords data point columns */
+.wpstats-mashboard-google-adwords-data-point-column {
+	width: auto;
+	min-width: 50%;
+}
+
+.wpstats-mashboard-chart-container  {
+	margin-bottom: 10px;
+}

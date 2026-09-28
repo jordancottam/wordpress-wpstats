@@ -1,0 +1,238 @@
+<?php
+
+defined( 'ABSPATH' ) or exit();
+
+?>
+
+<div class="wrap">
+
+	<div id="wpstats-logo-container">
+		<?php $mashboard_page_url = esc_attr( admin_url() . 'admin.php?page=wpstats-mashboard' ); ?>
+		<?php $brand_logo_image_url = esc_attr( get_option( 'wpstats_brand_logo_image_url' ) ); ?>
+		<a class="wpstats-shadowless" href="<?php echo $mashboard_page_url; ?>"><img src="<?php echo $brand_logo_image_url; ?>"></a>
+	</div>
+
+	<!-- Facebook Query Parameters (Date Range, Frequency) -->
+	<div id="wpstats-date-range-container">
+		<!-- Start Date & End Date -->
+		<label class="wpstats-query-parameter-label" for="start_date"><?php _e( 'Date Range:', 'wpstats' ); ?></label>
+		<input class="wpstats-date" type="text" id="start_date" name="start_date" required="required" value="">
+		<input class="wpstats-date" type="text" id="end_date" name="end_sate" required="required" value="">
+		<button class="wpstats-button" id="date_range" type="submit" name="date_range" value="-1"><?php _e( 'Update', 'wpstats' ); ?></button>
+	</div>
+
+	<!-- Page Loading Container -->
+	<div id="wpstats-page-loading-container" class="wpstats-loading-container">
+		<img class="wpstats-loading-image" src="<?php echo wpstats_TEMPLATE_IMAGES_URL . 'loading-spin.svg'; ?>" width="64" height="64">
+	</div>
+
+	<!-- Page Error Container -->
+	<div id="wpstats-page-error-container" class="wpstats-page-error-container wpstats-error-container">
+		<p></p>
+	</div>
+
+	<div id="wpstats-facebook-range-error-container" class="wpstats-error-container">
+		<p id="wpstats-facebook-range-error">
+			<?php _e( 'Facebook only returns results within a 91 day period.', 'wpstats' ); ?>
+			<a class="wpstats-read-more" data-tooltip=""><?php _e( 'Read more.', 'wpstats' ); ?></a>
+		</p>
+	</div>
+
+	<!-- Facebook Page Data Container -->
+	<div id="wpstats-facebook-data-container" class="wpstats-service-detail-container">
+
+		<!-- Top Container (Header, Icons) -->
+		<div class="wpstats-detail-top-container">
+			<h3 class="wpstats-detail-header"><?php _e( 'Facebook', 'wpstats' ); ?>
+				<div class="wpstats-detail-icons">
+					<span id="wpstats-facebook-settings-icon" class="wpstats-setting-tool-tip wpstats-tooltip wpstats-settings-icon wpstats-disabled" data-tooltip="<?php _e( 'Configure Settings for Facebook', 'wpstats' ); ?>"></span>
+					<span id="wpstats-facebook-grid-icon" class="wpstats-grid-icon wpstats-select-tool-tip wpstats-tooltip wpstats-disabled" data-tooltip="<?php _e( 'Show/Hide Facebook Data Points', 'wpstats' ); ?>"></span>
+					<div id="wpstats-facebook-grid-icon-content" class="wpstats-grid-content">
+						<p>
+							<label>
+								<input type="checkbox" class="wpstats-show-data-point" value="wpstats-facebook-total-likes-data-point" checked>
+								<?php _e( 'Total Likes', 'wpstats' ); ?>
+							</label>
+						</p>
+						<p>
+							<label>
+								<input type="checkbox" class="wpstats-show-data-point" value="wpstats-facebook-total-reach-data-point" checked>
+								<?php _e( 'Total Reach', 'wpstats' ); ?>
+							</label>
+						</p>
+						<p>
+							<label>
+								<input type="checkbox" class="wpstats-show-data-point" value="wpstats-facebook-page-visits-data-point" checked>
+								<?php _e( 'Page Visits', 'wpstats' ); ?>
+							</label>
+						</p>
+						<p>
+							<label>
+								<input type="checkbox" class="wpstats-show-data-point" value="wpstats-facebook-people-engaged-data-point" checked>
+								<?php _e( 'People Engaged', 'wpstats' ); ?>
+							</label>
+						</p>
+					</div>
+				</div>
+			</h3>
+		</div>
+
+		<!-- Chart Key / Figure -->
+		<div id="wpstats-detail-chart-key-container" class="wpstats-service-detail-chart-key-container">
+			<span id="wpstats-facebook-likes-chart-key-icon" class="wpstats-detail-chart-key-icon">&nbsp;</span>
+			<span><?php _e( 'Total Likes', 'wpstats' ); ?></span>
+			<span id="wpstats-facebook-reach-chart-key-icon" class="wpstats-detail-chart-key-icon">&nbsp;</span>
+			<span><?php _e( 'Total Reach', 'wpstats' ); ?></span>
+		</div>
+
+		<!-- Loading Image -->
+		<div id="wpstats-facebook-loading-container" class="wpstats-loading-container">
+			<img class="wpstats-loading-image" src="<?php echo wpstats_TEMPLATE_IMAGES_URL . 'loading-spin.svg'; ?>" width="64" height="64">
+		</div>
+
+		<!-- Settings Tab Content (Select Page, Setup, Deauthorize) -->
+		<div id="wpstats-facebook-settings-content" class="wpstats-settings-tab-settings-content">
+			<?php require_once wpstats_API_FUNCTIONS_PATH . 'facebook.php'; ?>
+			<?php $api_authenticate_url = esc_attr( wpstats_facebook_get_authentication_url( wpstats_FACEBOOK_DETAIL_PAGE_URL ) ); ?>
+			<!-- No Pages -->
+			<div id="wpstats-facebook-settings-no-pages-section" class="wpstats-facebook-settings-tab-section wpstats-settings-tab-section">
+				<h3><?php _e( 'No Pages Found', 'wpstats' ); ?></h3>
+				<p><?php _e( 'No pages found. Please try refreshing the page or deauthorize below then reauthorize with a Facebook account that has access to at least one page\'s insights.', 'wpstats' ); ?></p>
+			</div>
+			<!-- Page Selection -->
+			<div id="wpstats-facebook-settings-page-selection-section" class="wpstats-facebook-settings-tab-section wpstats-settings-tab-section">
+				<h3><?php _e( 'Select Page', 'wpstats' ); ?></h3>
+				<p><?php _e( 'Select a page from the list below to display data for:', 'wpstats' ); ?></p>
+				<select id="wpstats-facebook-page-list" class="wpstats-card-settings-profiles">
+				</select>
+				<button id="wpstats-facebook-save-page-id" class="wpstats-settings-tab-save-data-button wpstats-button"><?php _e( 'Save', 'wpstats' ); ?></button>
+			</div>
+			<!-- Reauthorize / Reauthenticate -->
+			<div id="wpstats-facebook-settings-reauthorize-section" class="wpstats-facebook-settings-tab-section wpstats-settings-tab-section">
+				<h3><?php _e( 'Reauthorize', 'wpstats' ); ?></h3>
+				<p><?php _e( 'Sorry, an error occurred that requires you to reauthorize/reauthenticate with Google. This is likely due to either an expired access token, you removed the application from your account, or you logged out of your account and your session expired. Please click the button below to continue.', 'wpstats' ); ?></p>
+				<a id="wpstats-facebook-reauthorize" href="<?php echo $api_authenticate_url; ?>" class="wpstats-button"><?php _e( 'Reauthorize', 'wpstats' ); ?></a>
+			</div>
+			<!-- Deauthorize / Deauthenticate -->
+			<div id="wpstats-facebook-settings-deauthorize-section" class="wpstats-facebook-settings-tab-section wpstats-settings-tab-section">
+				<h3><?php _e( 'Deauthorize', 'wpstats' ); ?></h3>
+				<p><?php _e( 'Purge all Facebook authentication and cache data from your local install.', 'wpstats' ); ?></p>
+				<?php $fb_deauthorize_url = esc_attr( wpstats_api_facebook_get_deauthorize_url( wpstats_FACEBOOK_DETAIL_PAGE_URL ) ); ?>
+				<a id="wpstats-facebook-deauthorize" href="<?php echo $fb_deauthorize_url; ?>" class=" wpstats-button"><?php _e( 'Deauthorize', 'wpstats' ); ?></a>
+			</div>
+			<!-- Setup / Authorize / Authenticate -->
+			<div id="wpstats-facebook-settings-authorize-section" class="wpstats-facebook-settings-tab-section wpstats-settings-tab-section">
+				<h3><?php _e( 'Setup', 'wpstats' ); ?></h3>
+				<p><?php _e( 'Click the button below to Login to Facebook and allow the application to access your page(s) insights. You will then be able to see data for your page(s). Please make sure you login with an account that has access to at least one page\'s insights.', 'wpstats' ); ?></p>
+				<a id="wpstats-facebook-authorize" href="<?php echo $api_authenticate_url; ?>" class="wpstats-button"><?php _e( 'Setup', 'wpstats' ); ?></a>
+			</div>
+		</div>
+
+		<!-- Data Tab Content (Chart, Data Points, Data Tables) -->
+		<div id="wpstats-facebook-data-content">
+
+			<!-- Chart -->
+			<div id="wpstats-facebook-chart-container" class="wpstats-detail-chart-container wpstats-chart-container">
+				<div id="wpstats-facebook-chart" class="wpstats-detail-chart"></div>
+			</div>
+
+			<!-- Data Points -->
+			<div id="wpstats-facebook-data-points-container" class="wpstats-data-points-container">
+
+				<!-- Total Likes -->
+				<div id="wpstats-facebook-total-likes-data-point" class="wpstats-service-detail-data-point-column wpstats-data-point-column">
+					<div class="wpstats-service-detail-data-point-column-header">
+						<span class="wpstats-service-detail-data-point-column-header-label"><?php _e( 'Total Likes', 'wpstats' ); ?></span>
+						<span class="wpstats-dashboard-data-point-heading-info wpstats-tooltip" data-tooltip="<?php _e( 'Total number of people who have liked your page during this period. This metric is updated every 24 hours.', 'wpstats' ); ?>"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-content">
+						<span id="wpstats-facebook-total-likes-total" class="wpstats-data-point-value"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-footer">
+						<span id="wpstats-facebook-total-likes-change-direction" class="wpstats-data-point-change-direction"></span>
+						<span id="wpstats-facebook-total-likes-change" class="wpstats-data-point-change"></span>
+						<?php $title = __( 'total likes at the end of the previous period.', 'wpstats' ); ?>
+						<span id="wpstats-facebook-total-likes-change-info" class="wpstats-dashboard-data-point-heading-info wpstats-tooltip wpstats-service-data-point-change-percentage-info" data-tooltip="<?php echo $title; ?>" data-tooltip-backup="<?php echo $title; ?>"></span>
+					</div>
+				</div>
+
+				<!-- Total Reach -->
+				<div id="wpstats-facebook-total-reach-data-point" class="wpstats-service-detail-data-point-column wpstats-data-point-column">
+					<div class="wpstats-service-detail-data-point-column-header">
+						<span class="wpstats-service-detail-data-point-column-header-label"><?php _e( 'Total Reach', 'wpstats' ); ?></span>
+						<span class="wpstats-dashboard-data-point-heading-info wpstats-tooltip" data-tooltip="<?php _e( 'The number of people who have seen any content associated with your page during this period. This metric is updated every 24 hours.', 'wpstats' ); ?>"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-content">
+						<span id="wpstats-facebook-total-reach-total" class="wpstats-data-point-value"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-footer">
+						<span id="wpstats-facebook-total-reach-change-direction" class="wpstats-data-point-change-direction"></span>
+						<span id="wpstats-facebook-total-reach-change" class="wpstats-data-point-change"></span>
+						<?php $title = __( 'total reach during the previous period.', 'wpstats' ); ?>
+						<span id="wpstats-facebook-total-reach-change-info" class="wpstats-dashboard-data-point-heading-info wpstats-tooltip wpstats-service-data-point-change-percentage-info" data-tooltip="<?php echo $title; ?>" data-tooltip-backup="<?php echo $title; ?>"></span>
+					</div>
+				</div>
+
+				<!-- Page Visits -->
+				<div id="wpstats-facebook-page-visits-data-point" class="wpstats-service-detail-data-point-column wpstats-data-point-column">
+					<div class="wpstats-service-detail-data-point-column-header">
+						<span class="wpstats-service-detail-data-point-column-header-label"><?php _e( 'Page Visits', 'wpstats' ); ?></span>
+						<span class="wpstats-dashboard-data-point-heading-info wpstats-tooltip" data-tooltip="<?php _e( 'Total amount of page visits by all users during this period. This metric is updated every 24 hours.', 'wpstats' ); ?>"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-content">
+						<span id="wpstats-facebook-page-visits-total" class="wpstats-data-point-value"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-footer">
+						<span id="wpstats-facebook-page-visits-change-direction" class="wpstats-data-point-change-direction"></span>
+						<span id="wpstats-facebook-page-visits-change" class="wpstats-data-point-change"></span>
+						<?php $title = __( 'page visits during the previous period.', 'wpstats' ); ?>
+						<span id="wpstats-facebook-page-visits-change-info" class="wpstats-dashboard-data-point-heading-info wpstats-tooltip wpstats-service-data-point-change-percentage-info" data-tooltip="<?php echo $title; ?>" data-tooltip-backup="<?php echo $title; ?>"></span>
+					</div>
+				</div>
+
+				<!-- People Engaged -->
+				<div id="wpstats-facebook-people-engaged-data-point" class="wpstats-service-detail-data-point-column wpstats-data-point-column">
+					<div class="wpstats-service-detail-data-point-column-header">
+						<span class="wpstats-service-detail-data-point-column-header-label"><?php _e( 'People Engaged', 'wpstats' ); ?></span>
+						<span class="wpstats-dashboard-data-point-heading-info wpstats-tooltip" data-tooltip="<?php _e( 'The unique number of people who liked, commented on, shared, or clicked on your posts during this period. This metric is updated every 24 hours.', 'wpstats' ); ?>"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-content">
+						<span id="wpstats-facebook-people-engaged-total" class="wpstats-data-point-value"></span>
+					</div>
+					<div class="wpstats-service-detail-data-point-column-footer">
+						<span id="wpstats-facebook-people-engaged-change-direction" class="wpstats-data-point-change-direction"></span>
+						<span id="wpstats-facebook-people-engaged-change" class="wpstats-data-point-change"></span>
+						<?php $title = __( 'people were engaged during the previous period.', 'wpstats' ); ?>
+						<span id="wpstats-facebook-people-engaged-change-info" class="wpstats-dashboard-data-point-heading-info wpstats-tooltip wpstats-service-data-point-change-percentage-info" data-tooltip="<?php echo $title; ?>" data-tooltip-backup="<?php echo $title; ?>"></span>
+					</div>
+				</div>
+			</div> <!-- End Data Points -->
+
+			<!-- Facebook Data Tables -->
+			<div class="wpstats-service-detail-data-tables-container">
+
+				<!-- Top Posts -->
+				<div class="wpstats-service-detail-data-table-column wpstats-service-detail-full-width-data-table-column">
+					<div id="wpstats-facebook-top-posts-data-table-column-content" class="wpstats-data-table-column-content">
+						<h2><?php _e( 'Top 5 Posts', 'wpstats' ); ?></h2>
+						<div id="wpstats-facebook-top-posts-data-error-container" class="wpstats-top-data-error-container">
+							<p><?php _e( 'No data available for this period.', 'wpstats' ); ?></p>
+						</div>
+						<table id="wpstats-facebook-top-posts-data-table" class="wpstats-service-detail-data-table wp-list-table widefat">
+							<thead>
+								<tr>
+									<th><?php _e( 'Name', 'wpstats' ); ?></th>
+									<th><?php _e( 'Likes', 'wpstats' ); ?></th>
+									<th><?php _e( 'Reach', 'wpstats' ); ?></th>
+									<th><?php _e( 'Comments', 'wpstats' ); ?></th>
+									<th><?php _e( 'Date', 'wpstats' ); ?></th>
+								</tr>
+							</thead>
+							<tbody id="wpstats-facebook-top-posts-data-table-tbody"></tbody>
+						</table>
+					</div>
+				</div>
+			</div> <!-- End Data Tables -->
+		</div> <!-- End Data Tab Content -->
+	</div> <!-- Page Data Content -->
+</div> <!-- .wrap -->
