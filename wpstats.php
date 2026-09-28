@@ -27,7 +27,7 @@ defined( 'ABSPATH' ) or exit();
  */
 require_once dirname( __FILE__ ) . '/bootstrap.php';
 
-add_action( 'init', 'wpstats_load_translations' );
+add_action( 'init', 'wpstats_load_translations', 10 );
 /**
  * Loads the translation file for wpstats.
  *
@@ -97,7 +97,7 @@ function wpstats_login_redirect( $request_to, $request, $user ) {
 	return $url;
 }
 
-add_action( 'admin_init', 'wpstats_redirect_logged_in_user' );
+add_action( 'admin_init', 'wpstats_redirect_logged_in_user', 10 );
 /**
  * Redirects a logged in user to the wpstats mashboard.
  *
@@ -191,7 +191,7 @@ function wpstats_deactivate() {
 }
 register_deactivation_hook( __FILE__, 'wpstats_deactivate' );
 
-add_action( 'admin_menu', 'wpstats_admin_menu' );
+add_action( 'admin_menu', 'wpstats_admin_menu', 10 );
 /**
  * Run when the `admin_menu` action fires.
  * 
@@ -359,7 +359,7 @@ function wpstats_settings() {
 	require_once wpstats_TEMPLATE_ADMIN_PATH . 'settings.php';
 }
 
-add_action( 'admin_enqueue_scripts', 'wpstats_admin_enqueue_scripts' );
+add_action( 'admin_enqueue_scripts', 'wpstats_admin_enqueue_scripts', 10 );
 
 /**
  * Run when the `admin_enqueue_scripts` action fires.
